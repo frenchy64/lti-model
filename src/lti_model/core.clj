@@ -170,6 +170,7 @@
        :types ts})))
 
 (def -wild {:op :Wild})
+(def -Int {:op :Int})
 (def -any {:op :Intersection :types #{}})
 (def -nothing {:op :Union :types #{}})
 (defn IFn? [t] (= :IFn (:op t)))
@@ -202,8 +203,35 @@
                         :methods methods}))
       ('#{Int} t) {:op :Int}
       ('#{Any} t) {:op :Intersection :types #{}}
+      ('#{?} t) {:op :Wild}
       (symbol? t) {:op :F :sym t}
       :else (assert false t))))
+
+; T -> Any
+(defn unparse-type [t]
+  (case (:op t)
+    :Wild '?
+    :Poly (let [gs (mapv (fn [s]
+                           (if (contains? *tvar* s)
+                             (gensym s)
+                             s))
+                         (:syms t))
+                body (Poly-body t (mapv (fn [s] {:op :F :name s}) gs))]
+            (list 'All gs body))
+    :F (:name t)
+    :B (:index t)
+    :Union (list* 'U (mapv unparse-type (:types t)))
+    :Intersection (list* 'I (mapv unparse-type (:types t)))
+    :Closure 'Closure$$
+    :Seq (list 'Seq (unparse-type (:type t)))
+    :Int 'Int
+    :Fn (let [dom (mapv unparse-type (:dom t))
+              rng (unparse-type (:rng t))]
+          (vec dom [:-> rng]))
+    :IFn (let [methods (mapv unparse-type (:methods t))]
+           (if (= 1 (count methods))
+             (first methods)
+             (doall (list* 'IFn methods))))))
 
 (def constant-type
   {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))})
@@ -340,6 +368,17 @@
 
     :else nil))
 
+(defn smallest-matching-super [t P]
+  (match-dir :up t P))
+(defn largest-matching-sub [t P]
+  (match-dir :down t P))
+
+(defn check-match [t P m]
+  (or m 
+      (throw (ex-info
+               (str "Did not match: \nActual:\n\t" (unparse-type t) "\nExpected:\n\t" (unparse-type P))
+               {::type-error true}))))
+
 #_
 (t/ann check [P Env E :-> T])
 (defn check [P env e]
@@ -348,11 +387,15 @@
    :post [(:op %)]}
   (prn "e" e)
   (cond
-    (symbol? e) (or (constant-type e)
-                    (get env e)
-                    (assert nil "Bad symbol"))
-    (vector? e) {:op :Seq
-                 :type (make-U (mapv #(check -wild env %) e))}
+    (symbol? e) (let [t (or (constant-type e)
+                            (get env e)
+                            (assert nil (str "Bad symbol" e)))
+                      m (smallest-matching-super t P)]
+                  (check-match t P m))
+    (vector? e) (let [t {:op :Seq
+                         :type (make-U (mapv #(check -wild env %) e))}
+                      m (smallest-matching-super t P)]
+                  (check-match t P m))
     (seq? e) (let [[op & args] e
                    _ (assert (seq e))]
                (case op
@@ -365,12 +408,16 @@
                  (let [cop (check -wild env op)
                        cargs (mapv #(check -wild env %) args)]
                    (assert nil "TODO app check"))))
-    (integer? e) {:op :Int}
+    (integer? e) (let [t {:op :Int}
+                       m (smallest-matching-super t P)]
+                   (check-match t P m))
     :else (assert nil (str "Bad check: " e))))
 
 (comment
+  (check -Int {} 1)
   (check -wild {} 1)
   (check -wild {} [1 2])
+  (check -Int {} [1 2])
   (check -wild {} '(fn [x] [1 2]))
   (check -wild {} '(app (fn [x] [1 2]) 1))
 )
