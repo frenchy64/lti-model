@@ -193,7 +193,7 @@
                  I {:op :Intersection
                     :types (into #{} (map parse-type) (rest t))}
                  Seq {:op :Seq
-                      :types (parse-type (second t))}
+                      :type (parse-type (second t))}
                  All (let [[syms t] (rest t)]
                        (binding [*tvar* (into *tvar* syms)]
                          (Poly* syms (parse-type t))))
@@ -202,10 +202,11 @@
                        {:op :IFn
                         :methods methods}))
       ('#{Int} t) {:op :Int}
-      ('#{Any} t) {:op :Intersection :types #{}}
+      ('#{Any} t) -any
+      ('#{Nothing} t) -nothing
       ('#{?} t) {:op :Wild}
-      (symbol? t) {:op :F :sym t}
-      :else (assert false t))))
+      ((every-pred symbol? *tvar*) t) {:op :F :sym t}
+      :else (assert false (str "Error parsing type: " t)))))
 
 ; T -> Any
 (defn unparse-type [t]
@@ -220,8 +221,12 @@
             (list 'All gs body))
     :F (:name t)
     :B (:index t)
-    :Union (list* 'U (mapv unparse-type (:types t)))
-    :Intersection (list* 'I (mapv unparse-type (:types t)))
+    :Union (if (empty? (:types t))
+             'Nothing
+             (list* 'U (mapv unparse-type (:types t))))
+    :Intersection (if (empty? (:types t))
+                    'Any
+                    (list* 'I (mapv unparse-type (:types t))))
     :Closure 'Closure$$
     :Seq (list 'Seq (unparse-type (:type t)))
     :Int 'Int
@@ -231,7 +236,8 @@
     :IFn (let [methods (mapv unparse-type (:methods t))]
            (if (= 1 (count methods))
              (first methods)
-             (doall (list* 'IFn methods))))))
+             (doall (list* 'IFn methods))))
+    (assert nil (str "Cannot unparse type: " (pr-str t)))))
 
 (def constant-type
   {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))})
@@ -373,12 +379,19 @@
 (defn largest-matching-sub [t P]
   (match-dir :down t P))
 
+(defn expected-error [msg t P e]
+  (throw (ex-info
+           (str msg "\nActual:\n\t" (print-str (unparse-type t)) "\nExpected:\n\t" (print-str (unparse-type P))
+                "\nin:\n\t" e)
+           {::type-error true})))
+
 (defn check-match [t P m e]
-  (or m 
-      (throw (ex-info
-               (str "Did not match: \nActual:\n\t" (unparse-type t) "\nExpected:\n\t" (unparse-type P)
-                    "\nin:\n\t" e)
-               {::type-error true}))))
+  {:pre [(:op t)
+         (:op P)
+         ((some-fn :op nil?) m)]
+   :post [(:op %)]}
+  (or m
+      (expected-error "Did not match:" t P e)))
 
 #_
 (t/ann check [P Env E :-> T])
@@ -400,11 +413,30 @@
                    _ (assert (seq e))]
                (case op
                  fn (let [[plist body] args
-                          t {:op :Closure
-                             :env env
-                             :expr e}
-                          m (smallest-matching-super t P)]
-                      (check-match t P m e))
+                          t (cond
+                              (= -wild P) {:op :Closure
+                                           :env env
+                                           :expr e}
+                              ;; TODO unions
+                              (IFn? P) {:op :IFn
+                                        :methods (mapv (fn [m]
+                                                         {:post [(Fn? %)]}
+                                                         (when-not (= (count plist) (count (:dom m)))
+                                                           (throw (ex-info (str "Function does not match expected number of parameters")
+                                                                           {::type-error true})))
+                                                         (let [env (merge env (zipmap plist 
+                                                                                      ;TODO demote wildcards
+                                                                                      (:dom m)))
+                                                               rng (check (:rng m) env body)]
+                                                           ;; TODO demote wildcards in dom
+                                                           (assoc m :rng rng)))
+                                                       (:methods P))}
+                              (= -any P) -any
+                              :else (throw (ex-info (str "Function does not match expected type:"
+                                                         "\nExpected:\n\t" (unparse-type P)
+                                                         "\nin:\n\t" e)
+                                                    {::type-error true})))]
+                      t)
                  (let [cop (check -wild env op)
                        cargs (mapv #(check -wild env %) args)]
                    (assert nil "TODO app check"))))

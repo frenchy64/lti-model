@@ -3,7 +3,7 @@
             [lti-model.core :refer :all :as lti]))
 
 (defmacro tc [P e]
-  `(check (parse-type '~P) {} '~e))
+  `(unparse-type (check (parse-type '~P) {} '~e)))
 
 (defmacro handle-type-error [f & body]
   `(try (do ~@body)
@@ -27,7 +27,11 @@
   (is (tc-err Int [1 2]))
   (is (tc Int [1 2]))
   (is (tc ? (fn [x] [1 2])))
-  ;; TODO
+  (is (tc [? :-> Int] (fn [x] 1)))
+  (is (tc [Int :-> Int] (fn [x] x)))
+  (is (tc-err [Int :-> Nothing] (fn [x] x)))
+  (is (tc [? :-> Int] (fn [x] [1 2])))
+  (is (tc [? :-> (Seq Int)] (fn [x] [1 2])))
   (is (tc [Int :-> Int] (fn [x] [1 2])))
   (is (tc -wild (app (fn [x] [1 2]) 1)))
   )
