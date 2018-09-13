@@ -227,7 +227,7 @@
     :Int 'Int
     :Fn (let [dom (mapv unparse-type (:dom t))
               rng (unparse-type (:rng t))]
-          (vec dom [:-> rng]))
+          (vec (concat dom [:-> rng])))
     :IFn (let [methods (mapv unparse-type (:methods t))]
            (if (= 1 (count methods))
              (first methods)
@@ -268,7 +268,7 @@
                (some (fn [s] (subtype-Fn? s %))
                      (:types s)))
             (:types t))
-    :else false))
+    :else (assert nil "TODO") #_false))
 
 (declare match-dir)
 
@@ -373,10 +373,11 @@
 (defn largest-matching-sub [t P]
   (match-dir :down t P))
 
-(defn check-match [t P m]
+(defn check-match [t P m e]
   (or m 
       (throw (ex-info
-               (str "Did not match: \nActual:\n\t" (unparse-type t) "\nExpected:\n\t" (unparse-type P))
+               (str "Did not match: \nActual:\n\t" (unparse-type t) "\nExpected:\n\t" (unparse-type P)
+                    "\nin:\n\t" e)
                {::type-error true}))))
 
 #_
@@ -385,33 +386,32 @@
   {:pre [(:op P)
          (map? env)]
    :post [(:op %)]}
-  (prn "e" e)
   (cond
     (symbol? e) (let [t (or (constant-type e)
                             (get env e)
                             (assert nil (str "Bad symbol" e)))
                       m (smallest-matching-super t P)]
-                  (check-match t P m))
+                  (check-match t P m e))
     (vector? e) (let [t {:op :Seq
                          :type (make-U (mapv #(check -wild env %) e))}
                       m (smallest-matching-super t P)]
-                  (check-match t P m))
+                  (check-match t P m e))
     (seq? e) (let [[op & args] e
                    _ (assert (seq e))]
                (case op
-                 fn (let [[plist body] args]
-                      (cond
-                        (= -wild P) {:op :Closure
-                                     :env env
-                                     :expr e}
-                        :else (assert nil "TODO fn check")))
+                 fn (let [[plist body] args
+                          t {:op :Closure
+                             :env env
+                             :expr e}
+                          m (smallest-matching-super t P)]
+                      (check-match t P m e))
                  (let [cop (check -wild env op)
                        cargs (mapv #(check -wild env %) args)]
                    (assert nil "TODO app check"))))
     (integer? e) (let [t {:op :Int}
                        m (smallest-matching-super t P)]
-                   (check-match t P m))
-    :else (assert nil (str "Bad check: " e))))
+                   (check-match t P m e))
+    :else (assert nil (str "Bad expression in check: " e))))
 
 (comment
   (check -Int {} 1)
