@@ -170,6 +170,10 @@
        :types ts})))
 
 (def -wild {:op :Wild})
+(def -any {:op :Intersection :types #{}})
+(def -nothing {:op :Union :types #{}})
+(defn IFn? [t] (= :IFn (:op t)))
+(defn Fn? [t] (= :Fn (:op t)))
 
 ; Any -> T
 (defn parse-type [t]
@@ -204,6 +208,138 @@
 (def constant-type
   {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))})
 
+(declare subtype?)
+
+(defn subtype-Fn? [s t]
+  {:pre [(= :Fn (:op s))
+         (= :Fn (:op t))]
+   :post [(boolean? %)]}
+  (and (= (count (:dom s))
+          (count (:dom t)))
+       (every? identity
+               (map subtype? (:dom t) (:dom s)))
+       (subtype? (:rng s) (:rng t))))
+
+
+(defn subtype [s t]
+  {:pre [(:op s)
+         (:op t)]
+   :post [(boolean? %)]}
+  (cond
+    (or (= s t) 
+        (= -any t)
+        (= -nothing s))
+    true
+    (= :Intersection (:op t)) (every? #(subtype? s %) (:types t))
+    (= :Intersection (:op s)) (boolean (some #(subtype? % t) (:types s)))
+    (= :Union (:op t)) (some #(subtype? % t) (:types s))
+    (= :Union (:op s)) (every? #(subtype? % t) (:types s))
+    (and (= :IFn (:op s))
+         (= :IFn (:op t)))
+    (every? #(boolean
+               (some (fn [s] (subtype-Fn? s %))
+                     (:types s)))
+            (:types t))
+    :else false))
+
+(declare match-dir)
+
+(defn flip-dir [dir]
+  {:post [(#{:up :down} %)]}
+  ({:up :down :down :up} dir))
+
+(defn match-dir-Fn [dir t P]
+  {:pre [(Fn? t)
+         (Fn? P)]
+   :post [((some-fn nil? :op) %)]}
+  (when (= (count (:dom t))
+           (count (:dom P)))
+    (let [dom (mapv #(match-dir (flip-dir dir) %1 %2)
+                    (:dom P)
+                    (:dom t))
+          rng (match-dir dir (:rng t) (:rng P))]
+      (when (every? :op dom)
+        (when rng
+          {:op :Fn
+           :dom dom
+           :rng rng})))))
+
+(defn match-for-prototype [dir P]
+  (let [[small large] (if (= :up dir)
+                        [-nothing -any]
+                        [-any -nothing])]
+    (case (:op P)
+      :Seq {:op :Seq :type small}
+      :IFn {:op :IFn
+            :methods (mapv (fn [m]
+                             (-> m
+                                 (update :dom #(repeat (count %) large))
+                                 (assoc :rng small)))
+                           (:types P))})))
+
+; T P -> T
+(defn match-dir
+  "Returns smallest supertype of t that matches P if direction is :up.
+   Returns largest subtype of t that matches P if direction is :down.
+  Returns nil if undefined."
+  [dir t P]
+  {:post [((some-fn nil? :op) %)]}
+  (cond
+    (or (= t P)
+        (= -wild P))
+    t
+    (and (IFn? t)
+         (IFn? P))
+    (let [matches (mapv #(some
+                           (fn [t]
+                             (match-dir-Fn dir t %))
+                           (:methods t))
+                        (:methods P))]
+      (when (every? :op matches)
+        {:op :IFn
+         :methods matches}))
+
+    (and (or (and (= :up dir)
+                  (= -nothing t))
+             (and (= :down dir)
+                  (= -any t)))
+        (and (IFn? P)
+             (= :Seq (:op P))))
+    (match-dir dir (match-for-prototype dir P) P)
+
+    (= :Intersection (:op P))
+    (let [matches (mapv #(match-dir dir t %) (:types P))]
+      (when (every? :op matches)
+        {:op :Intersection
+         :types (set matches)}))
+    (= :Union (:op P))
+    (let [matches (mapv #(match-dir dir t %) (:types P))]
+      (when (some :op matches)
+        (make-U (set (remove nil? matches)))))
+
+
+    ; (Seq Int) ^ (Seq ?) => (Seq Int)
+    ; (Seq Any) ^ (Seq ?) => (Seq Any)
+    ; Int ^ (Seq ?) => FAIL
+    ; ----------------------------------------------------------------
+    ; (I Int (Seq Int) (Seq Any)) ^ (Seq ?) => (I (Seq Int) (Seq Any))
+    (= :Intersection (:op t))
+    (let [matches (mapv #(match-dir dir % P) (:types t))]
+      (when (some :op matches)
+        {:op :Intersection
+         :types (set (remove nil? matches))}))
+
+    ; (Seq Int) ^ (Seq ?) => (Seq Int)
+    ; (Seq Any) ^ (Seq ?) => (Seq Any)
+    ; ------------------------------------------------------------
+    ; (U (Seq Int) (Seq Any)) ^ (Seq ?) => (U (Seq Int) (Seq Any))
+    (= :Union (:op t))
+    (let [matches (mapv #(match-dir dir % P) (:types t))]
+      (when (every? :op matches)
+        (make-U (set matches))))
+
+    :else nil))
+
 #_
 (t/ann check [P Env E :-> T])
 (defn check [P env e]
@@ -226,8 +362,8 @@
                                      :env env
                                      :expr e}
                         :else (assert nil "TODO fn check")))
-                 (let[cop (check -wild env op)
-                      cargs (mapv #(check -wild env %) args)]
+                 (let [cop (check -wild env op)
+                       cargs (mapv #(check -wild env %) args)]
                    (assert nil "TODO app check"))))
     (integer? e) {:op :Int}
     :else (assert nil (str "Bad check: " e))))
