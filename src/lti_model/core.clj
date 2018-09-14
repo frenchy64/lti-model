@@ -50,7 +50,7 @@
          :syms (t/Vec t/Sym)
          :type Scope}
        '{:op ':F
-         :sym t/Sym}
+         :name t/Sym}
        '{:op ':B
          :index t/Sym}
        '{:op ':Closure
@@ -91,7 +91,7 @@
             {:pre [(:op t)
                    (integer? outer)]}
             (case (:op t)
-              :F (if (= n (:sym t))
+              :F (if (= n (:name t))
                    {:op :B
                     :index outer}
                    t)
@@ -112,7 +112,7 @@
   (reduce (fn [t sym]
             (abstract sym t))
           t
-          syms))
+          (rseq syms)))
 
 ; Expr Scope -> Expr
 (defn instantiate [image t]
@@ -151,6 +151,13 @@
    :post [(:op %)]}
   (instantiate-all images (:type p)))
 
+(defn Poly-frees [p]
+  {:pre [(= :Poly (:op p))]}
+  (mapv (fn [s]
+          {:op :F :name (gensym s)
+           :original-name s})
+        (:syms p)))
+
 (declare parse-type)
 
 ; (Seqable Sym) Type -> Poly
@@ -159,8 +166,12 @@
          (:op t)]}
   (let [ab (abstract-all syms t)]
     {:op :Poly
-     :syms syms
+     :syms (vec syms)
      :type ab}))
+
+(defn make-I [ts]
+  {:op :Intersection
+   :types (set ts)})
 
 (defn make-U [ts]
   (let [ts (set ts)]
@@ -205,21 +216,20 @@
       ('#{Any} t) -any
       ('#{Nothing} t) -nothing
       ('#{?} t) {:op :Wild}
-      ((every-pred symbol? *tvar*) t) {:op :F :sym t}
+      ((every-pred symbol? *tvar*) t) {:op :F :name t}
       :else (assert false (str "Error parsing type: " t)))))
 
 ; T -> Any
 (defn unparse-type [t]
   (case (:op t)
     :Wild '?
-    :Poly (let [gs (mapv (fn [s]
-                           (if (contains? *tvar* s)
-                             (gensym s)
-                             s))
-                         (:syms t))
-                body (Poly-body t (mapv (fn [s] {:op :F :name s}) gs))]
-            (list 'All gs body))
-    :F (:name t)
+    :Poly (let [gs (Poly-frees t)
+                body (unparse-type (Poly-body t gs))]
+            (list 'All
+                  (mapv (some-fn :original-name :name) gs)
+                  body))
+    :F (or (:original-name t)
+           (:name t))
     :B (:index t)
     :Union (if (empty? (:types t))
              'Nothing
@@ -240,7 +250,14 @@
     (assert nil (str "Cannot unparse type: " (pr-str t)))))
 
 (def constant-type
-  {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))})
+  {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))
+   'app0 (parse-type '(All [a b] [[a :-> b] :-> [a :-> b]]))
+   '+ (parse-type '[Int Int :-> Int])
+   'comp (parse-type '(All [a b c] [[b :-> c] [a :-> b] :-> [a :-> c]]))
+   'every-pred (parse-type '(All [a] [[a :-> Any] [a :-> Any] :-> [a :-> Any]]))
+   'partial (parse-type '(All [a b c] [[a b :-> c] a :-> [b :-> c]]))
+   'reduce (parse-type '(All [a b c] [[a c :-> a] a (Seq c) :-> a]))
+   })
 
 (declare subtype?)
 
@@ -255,7 +272,7 @@
        (subtype? (:rng s) (:rng t))))
 
 
-(defn subtype [s t]
+(defn subtype? [s t]
   {:pre [(:op s)
          (:op t)]
    :post [(boolean? %)]}
@@ -274,7 +291,7 @@
                (some (fn [s] (subtype-Fn? s %))
                      (:types s)))
             (:types t))
-    :else (assert nil "TODO") #_false))
+    :else false))
 
 (declare match-dir)
 
@@ -394,6 +411,151 @@
       (expected-error "Did not match:" t P e)))
 
 #_
+(defalias ConstraintSet
+  (U nil
+     {:xs (t/Set t/Sym)
+      :cs (t/Map t/Sym '{:lower T
+                         :upper T})
+      :delay (t/Set '{:lower T, :upper T})}))
+
+;ConstraintSet -> Any
+(defn unparse-cset [cs]
+  (when cs
+    {:xs (:xs cs)
+     :cs (zipmap (keys (:cs cs))
+                 (map (fn [v]
+                        {:lower (unparse-type (:lower v))
+                         :upper (unparse-type (:upper v))})
+                      (vals (:cs cs))))
+     :delay (into #{} (map (fn [v]
+                             {:lower (unparse-type (:lower v))
+                              :upper (unparse-type (:upper v))}))
+                  (:delay cs))}))
+
+
+; (Set Sym) -> C
+(defn trivial-constraint [X]
+  {:pre [(set? X)]}
+  {:xs X
+   :cs {}
+   :delay #{}})
+; (Set Sym) -> C
+(defn impossible-constraint [X]
+  {:pre [(set? X)]}
+  nil)
+; (Set Sym) T Sym T -> C
+(defn constraint-entry [X s x t]
+  {:pre [(set? X)
+         (symbol? x)]}
+  {:xs (set X)
+   :cs {x {:lower s :upper t}}
+   :delay #{}})
+; (Set Sym) (Set Sym) T T -> C
+(defn delay-constraint [V X s t]
+  {:pre [(set? V)
+         (set? X)]}
+  {:xs X
+   :cs {}
+   :delay #{{:V V :X X :lower s :upper t}}})
+
+; (Seqable C) -> C
+(defn intersect-constraints [cs]
+  (when (every? map? cs)
+    (let [imp? (atom nil)
+          c {:xs (into #{} (apply concat (map :xs cs)))
+             :cs (apply merge-with
+                        (fn [c1 c2]
+                          (let [l (make-U [(:lower c1) (:lower c2)])
+                                u (make-I [(:upper c1) (:upper c2)])]
+                            (when-not (subtype? l u)
+                              (reset! imp? true))
+                            {:lower l
+                             :upper u}))
+                        (map :cs cs))
+             :delay (into #{} (apply concat (map :delay cs)))}]
+      (when-not @imp?
+        c))))
+
+(defn promote-demote [dir V t]
+  {:pre [(#{:up :down} dir)
+         (set? V)
+         (:op t)]
+   :post [(:op t)]}
+  (case (:op t)
+    :Union (make-U (mapv #(promote-demote dir V %) (:types t)))
+    :Intersection {:op :Intersection
+                   :types (mapv #(promote-demote dir V %) (:types t))}
+    :F (if (V (:name t))
+         (if (= :up dir)
+           -any
+           -nothing)
+         t)
+    :Int t
+    :Seq (update t :type #(promote-demote dir V %))
+    :Poly (let [gs (Poly-frees t)
+                body (Poly-body t gs)
+                pbody (promote-demote dir (into V (map :name gs)) body)]
+            (Poly* (map :name gs) pbody))
+    :IFn (update t :methods #(promote-demote dir V %))
+    :Fn (-> t
+            (update :dom (fn [dom]
+                           (mapv #(promote-demote (flip-dir dir) V %)
+                                 dom)))
+            (update :rng #(promote-demote dir V %)))))
+
+(defn promote [V t]
+  (promote-demote :up V t))
+(defn demote [V t]
+  (promote-demote :down V t))
+
+; (Set Sym) (Set Sym) T T -> C
+(defn gen-constraint [V X s t]
+  {:pre [(set? V)
+         (set? X)
+         (:op s)
+         (:op t)]
+   :post [((some-fn map? nil?) %)]}
+  (prn "X" X)
+  (prn "s" (unparse-type s))
+  (prn "t" (unparse-type t))
+  (cond
+    (= s t) (trivial-constraint X)
+    ; CG-Top
+    (= -any t) (trivial-constraint X)
+    ; CG-Bot
+    (= -nothing s) (trivial-constraint X)
+    ; CG-Upper
+    (= :F (:op s))
+    (when (contains? X (:name s))
+      (prn "contains upper")
+      (let [T (demote V t)]
+        (constraint-entry X -nothing (:name s) T)))
+    ; CG-Lower
+    (= :F (:op t))
+    (when (contains? X (:name t))
+      (prn "contains lower")
+      (let [S (promote V s)]
+        (constraint-entry X S (:name t) -any)))
+    ; CG-Fun
+    (and (IFn? s)
+         (IFn? t))
+    (cond
+      (= 1
+         (count (:methods s))
+         (count (:methods t)))
+      (let [sm (first (:methods s))
+            tm (first (:methods t))]
+        (when (= (count (:dom sm))
+                 (count (:dom tm)))
+          (let [cdoms (mapv #(gen-constraint V X %1 %2)
+                            (:dom tm)
+                            (:dom sm))
+                crng (gen-constraint V X (:rng sm) (:rng tm))]
+            (intersect-constraints (cons crng cdoms)))))
+      :else (delay-constraint V X s t))
+    :else (impossible-constraint X)))
+
+#_
 (t/ann check [P Env E :-> T])
 (defn check [P env e]
   {:pre [(:op P)
@@ -417,10 +579,11 @@
                               (= -wild P) {:op :Closure
                                            :env env
                                            :expr e}
-                              ;; TODO unions
+                              ;; TODO unions of functions
                               (IFn? P) {:op :IFn
                                         :methods (mapv (fn [m]
-                                                         {:post [(Fn? %)]}
+                                                         {:pre [(Fn? m)]
+                                                          :post [(Fn? %)]}
                                                          (when-not (= (count plist) (count (:dom m)))
                                                            (throw (ex-info (str "Function does not match expected number of parameters")
                                                                            {::type-error true})))
@@ -438,8 +601,51 @@
                                                     {::type-error true})))]
                       t)
                  (let [cop (check -wild env op)
-                       cargs (mapv #(check -wild env %) args)]
-                   (assert nil "TODO app check"))))
+                       cargs (mapv #(check -wild env %) args)
+                       rt (case (:op cop)
+                            ;; TODO unions of functions
+                            :Closure (check {:op :IFn
+                                             :methods [{:op :Fn
+                                                        :dom cargs
+                                                        :rng P}]}
+                                            (:env cop)
+                                            (:expr cop))
+                            :IFn (some (fn [m]
+                                         {:pre [(Fn? m)]}
+                                         (when (= (count cargs)
+                                                  (count (:dom m)))
+                                           (when (every? identity (map subtype? cargs (:dom m)))
+                                             (smallest-matching-super (:rng m) P))))
+                                       (:methods cop))
+                            :Poly (let [gs (Poly-frees cop)
+                                        V #{}
+                                        X (set (map :name gs))
+                                        body (Poly-body cop gs)]
+                                    (case (:op body)
+                                      :IFn (when (= 1 (count (:methods body)))
+                                             (let [m (first (:methods body))]
+                                               (when (= (count (:dom m))
+                                                        (count cargs))
+                                                 (let [_ (prn "cargs" (mapv unparse-type cargs))
+                                                       _ (prn "dom" (mapv unparse-type (:dom m)))
+                                                       cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
+                                                       crng (gen-constraint V X (:rng m) (largest-matching-sub -any P))
+                                                       c (intersect-constraints
+                                                           (cons crng cdom))]
+                                                   (assert nil (str "What now? " 
+                                                                    (pr-str (mapv unparse-cset cdom))
+                                                                    (pr-str (mapv unparse-cset crng))
+                                                                    (pr-str (unparse-cset c))
+                                                                    ))
+                                                   (when c
+                                                     )))))
+                                      nil)))]
+                   (or rt
+                       (throw (ex-info (str "Could not apply function: "
+                                            "\nFunction:\n\t" (unparse-type cop)
+                                            "\nArguments:\n\t" (apply println-str (mapv unparse-type cargs))
+                                            "\nin:\n\t" e)
+                                       {::type-error true}))))))
     (integer? e) (let [t {:op :Int}
                        m (smallest-matching-super t P)]
                    (check-match t P m e))
