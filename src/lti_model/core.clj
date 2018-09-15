@@ -1,6 +1,8 @@
 (ns lti-model.core
   (:require [clojure.set :as set]
-            [lti-model.topo :as topo]))
+            [clojure.string :as str]
+            [lti-model.topo :as topo]
+            [clojure.pprint :refer [pprint]]))
 
 ; e ::=              ; Expressions
 ;     | c            ; constant functions
@@ -50,6 +52,7 @@
          :type T}
        '{:op ':Poly
          :syms (t/Vec t/Sym)
+         :constraints (t/Vec '{:lower Scope :upper Scope})
          :type Scope}
        '{:op ':F
          :name t/Sym}
@@ -72,7 +75,8 @@
                            :dom (t/Vec P)
                            :rng P})}
        '{:op ':Poly
-         :gsyms (t/Vec t/Sym)
+         :syms (t/Vec t/Sym)
+         :constraints (t/Vec '{:lower Scope :upper Scope})
          :type P}
        '{:op ':Int}
        '{:op ':Union
@@ -153,9 +157,20 @@
    :post [(:op %)]}
   (instantiate-all images (:type p)))
 
+(defn Poly-constraints [p images]
+  {:pre [(= :Poly (:op p))
+         (= (count images) (count (:syms p)))]}
+  (mapv (fn [c]
+          (-> c
+              (update :lower #(instantiate-all images %))
+              (update :upper #(instantiate-all images %))))
+        (:constraints p)))
+
+; Poly -> (Vec '{:op ':F})
 (defn Poly-frees [p]
   {:pre [(= :Poly (:op p))]}
   (mapv (fn [s]
+          {:pre [(symbol? s)]}
           {:op :F :name (gensym s)
            :original-name s})
         (:syms p)))
@@ -163,12 +178,22 @@
 (declare parse-type)
 
 ; (Seqable Sym) Type -> Poly
-(defn Poly* [syms t]
+(defn Poly* [syms t & {:keys [constraints original-names]}]
   {:pre [(every? symbol? syms)
-         (:op t)]}
-  (let [ab (abstract-all syms t)]
+         (vector? syms)
+         (:op t)
+         (or (nil? original-names)
+             (= (count syms) (count original-names)))]}
+  (let [ab (abstract-all syms t)
+        constraints (mapv (fn [c]
+                            (-> c
+                                (select-keys [:lower :upper])
+                                (update :lower #(abstract-all syms %))
+                                (update :upper #(abstract-all syms %))))
+                          constraints)]
     {:op :Poly
-     :syms (vec syms)
+     :syms (or original-names (vec syms))
+     :constraints constraints
      :type ab}))
 
 (defn make-I [ts]
@@ -228,14 +253,27 @@
       ((every-pred symbol? *tvar*) t) {:op :F :name t}
       :else (assert false (str "Error parsing type: " t)))))
 
+(declare unparse-type)
+
+(defn unparse-env [env]
+  (into {}
+        (map (fn [[k v]]
+               [k (unparse-type v)]))
+        env))
+
 ; T -> Any
 (defn unparse-type [t]
   (case (:op t)
     :Wild '?
     :Poly (let [gs (Poly-frees t)
-                body (unparse-type (Poly-body t gs))]
+                body (unparse-type (Poly-body t gs))
+                constraints (mapv (fn [{:keys [lower upper]}]
+                                    [(unparse-type lower) :< (unparse-type upper)])
+                                  (Poly-constraints t gs))]
             (list 'All
-                  (mapv (some-fn :original-name :name) gs)
+                  (into (mapv (some-fn :original-name :name) gs)
+                        (when (seq constraints)
+                          (into [:constraints] constraints)))
                   body))
     :F (or (:original-name t)
            (:name t))
@@ -246,7 +284,7 @@
     :Intersection (if (empty? (:types t))
                     'Any
                     (list* 'I (mapv unparse-type (:types t))))
-    :Closure 'Closure$$
+    :Closure (list 'Closure (unparse-env (:env t)) (:expr t))
     :Seq (list 'Seq (unparse-type (:type t)))
     :Int 'Int
     :Fn (let [dom (mapv unparse-type (:dom t))
@@ -259,7 +297,7 @@
     (assert nil (str "Cannot unparse type: " (pr-str t)))))
 
 (defn variance? [v]
-  (contains? #{:covariance :contravariant :invariant} v))
+  (contains? #{:covariant :contravariant :invariant} v))
 
 (defn fv-variances [t]
   (let [combine-variances (fn [v1 v2]
@@ -278,6 +316,7 @@
                          v))]
     (case (:op t)
       (:Wild :Closure :B :Int) {}
+      ; FIXME :constraints variances?
       :Poly (fv-variances (:type t))
       :F {(:name t) :covariant}
       :Scope (fv-variances (:scope t))
@@ -302,6 +341,7 @@
    'app0 (parse-type '(All [a b] [[a :-> b] :-> [a :-> b]]))
    'id (parse-type '(All [a] [a :-> a]))
    '+ (parse-type '[Int Int :-> Int])
+   'inc (parse-type '[Int :-> Int])
    'comp (parse-type '(All [a b c] [[b :-> c] [a :-> b] :-> [a :-> c]]))
    'every-pred (parse-type '(All [a] [[a :-> Any] [a :-> Any] :-> [a :-> Any]]))
    'partial (parse-type '(All [a b c] [[a b :-> c] a :-> [b :-> c]]))
@@ -546,6 +586,7 @@
                               (reset! imp? true))
                             {:lower l
                              :upper u}))
+                        {}
                         (map :cs cs))
              :delay (apply set/union (map :delay cs))}]
       (when-not @imp?
@@ -569,8 +610,15 @@
     :Seq (update t :type #(promote-demote dir V %))
     :Poly (let [gs (Poly-frees t)
                 body (Poly-body t gs)
-                pbody (promote-demote dir (into V (map :name gs)) body)]
-            (Poly* (map :name gs) pbody))
+                constraints (Poly-constraints t gs)
+                pbody (promote-demote dir V body)
+                pconstraints (mapv (fn [c]
+                                     ;; FIXME which directions for constraints?
+                                     (-> c
+                                         (update :lower #(promote-demote dir V %))
+                                         (update :upper #(promote-demote dir V %))))
+                                   constraints)]
+            (Poly* (map :name gs) pbody :constraints pconstraints))
     :IFn (update t :methods (fn [ms]
                               (mapv #(promote-demote dir V %) ms)))
     :Fn (-> t
@@ -601,9 +649,6 @@
          (:op s)
          (:op t)]
    :post [((some-fn map? nil?) %)]}
-  (prn "X" X)
-  (prn "s" (unparse-type s))
-  (prn "t" (unparse-type t))
   (cond
     (= s t) (trivial-constraint X)
     ; CG-Top
@@ -613,13 +658,11 @@
     ; CG-Upper
     (= :F (:op s))
     (when (contains? X (:name s))
-      (prn "contains upper")
       (let [T (demote V t)]
         (constraint-entry X -nothing (:name s) T)))
     ; CG-Lower
     (= :F (:op t))
     (when (contains? X (:name t))
-      (prn "contains lower")
       (let [S (promote V s)]
         (constraint-entry X S (:name t) -any)))
     ; CG-Fun
@@ -642,29 +685,6 @@
            (= 1 (count (:methods t))))
       (delay-constraint V X s t)
       :else nil)
-
-    #_#_
-    (and (= :Closure (:op s))
-         (IFn? t))
-    (cond
-      (= 1
-         (count (:methods t)))
-      (let [check-method (fn [m]
-                           (check {:op :IFn
-                                   :methods [(-> m
-                                                 (update :dom (fn [dom]
-                                                                (mapv #(demote X %) dom)))
-                                                 (update :rng #(subst (zipmap X (repeat -wild)) %)))]}
-                                  (:env s)
-                                  (:expr s)))
-            m (first (:methods t))
-            domfv (set/intersection X (apply set/union (map fv (:dom m))))
-            rngfv (set/intersection X (fv (:rng m)))
-            cm (check-method (first (:methods t)))
-            ]
-        (assert nil (str "TODO Closure csgen: " (unparse-type cm))))
-      :else (assert nil "TODO Closure <: IFn"))
-
     :else (impossible-constraint X)))
 
 (defn subst-with-constraint [X c t]
@@ -679,17 +699,19 @@
     (subst sbt t)))
 
 (defn order-delays [delays]
-  (prn "delays" (unparse-delays delays))
+  {:pre [(every? (comp set? :depends) delays)
+         (every? (comp set? :provides) delays)]}
   (when-let [order (topo/kahn-sort (delays->graph delays))]
     (let [delay-order (mapv
                         (fn [sym]
                           (set (filter #(contains? (:depends %) sym) delays)))
-                        order)
-          _ (assert (= (set delays)
-                       (apply set/union delay-order)))
-          _ (assert (= (count delays)
-                       (count (apply concat delay-order))))]
+                        order)]
       (vec (apply concat delay-order)))))
+
+(defn indent-str-by [ind s]
+  (apply str
+         (interpose (str "\n" ind)
+                    (str/split-lines s))))
 
 #_
 (t/ann check [P Env E :-> T])
@@ -723,6 +745,8 @@
                                                          (when-not (= (count plist) (count (:dom m)))
                                                            (throw (ex-info (str "Function does not match expected number of parameters")
                                                                            {::type-error true})))
+                                                         (prn "checking lambda" e)
+                                                         (prn "method" (unparse-type m))
                                                          (let [env (merge env (zipmap plist 
                                                                                       ;TODO demote wildcards
                                                                                       (:dom m)))
@@ -737,14 +761,19 @@
                                                     {::type-error true})))]
                       t)
                  (let [solve-method (fn solve-method [P cop cargs]
+                                      ;(prn "solve-method"  (:op cop))
                                       (case (:op cop)
                                         ;; TODO unions of functions
-                                        :Closure (check {:op :IFn
-                                                         :methods [{:op :Fn
-                                                                    :dom cargs
-                                                                    :rng P}]}
-                                                        (:env cop)
-                                                        (:expr cop))
+                                        :Closure (let [ifn (check {:op :IFn
+                                                                   :methods [{:op :Fn
+                                                                              :dom cargs
+                                                                              :rng P}]}
+                                                                  (:env cop)
+                                                                  (:expr cop))
+                                                       _ (assert (and (IFn? ifn)
+                                                                      (= 1 (count (:methods ifn)))))
+                                                       m (first (:methods ifn))]
+                                                   (:rng m))
                                         :IFn (some (fn [m]
                                                      {:pre [(Fn? m)]}
                                                      (when (= (count cargs)
@@ -756,8 +785,11 @@
                                                     V #{}
                                                     X (set (map :name gs))
                                                     body (Poly-body cop gs)
+                                                    existing-c (intersect-constraints
+                                                                 (map #(delay-constraint V X (:lower %) (:upper %))
+                                                                      (Poly-constraints cop gs)))
                                                     solve-pmethod
-                                                    (fn [P V X m cargs]
+                                                    (fn [m]
                                                       (when (= (count (:dom m))
                                                                (count cargs))
                                                         (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
@@ -765,15 +797,12 @@
                                                           (when-let [exp (largest-matching-sub -any P)]
                                                             (let [crng (gen-constraint V X rng exp)]
                                                               (when-let [c (intersect-constraints
-                                                                             (cons crng cdom))]
-                                                                (prn "c" (unparse-cset c))
+                                                                             (concat [crng existing-c] cdom))]
                                                                 ; true if X's in delays are acyclic
                                                                 (when-let [order (order-delays (:delay c))]
-                                                                  (prn "order" order)
                                                                   (when-let [c (reduce (fn [c {:keys [V X lower upper] :as dly}]
                                                                                          {:pre [(IFn? upper)
                                                                                                 (= 1 (count (:methods upper)))]}
-                                                                                         (prn "reduce" (unparse-delay dly))
                                                                                          (let [m (first (:methods upper))
                                                                                                ddom (mapv #(subst-with-constraint X c %)
                                                                                                           (:dom m))
@@ -790,19 +819,24 @@
                                                                                                [c c']))))
                                                                                        c
                                                                                        order)]
-                                                                    (prn "solved")
-                                                                    (subst-with-constraint X c rng)))))))))]
+                                                                    (cond
+                                                                      (IFn? rng) (Poly* (mapv :name gs) rng
+                                                                                        :constraints order
+                                                                                        :original-names (mapv :original-name gs))
+                                                                      (not (#{:Union :Intersection :Poly} (:op rng)))
+                                                                      (subst-with-constraint X c rng)
+                                                                      :else (do (prn "TODO return too complex")
+                                                                                nil))))))))))]
                                                 (case (:op body)
-                                                  :IFn (some (fn [m]
-                                                               (solve-pmethod P V X m cargs))
-                                                             (:methods body))
+                                                  :IFn (some solve-pmethod (:methods body))
                                                   nil))))
                        cop (check -wild env op)
                        cargs (mapv #(check -wild env %) args)
                        rt (solve-method P cop cargs)]
                    (or rt
                        (throw (ex-info (str "Could not apply function: "
-                                            "\nFunction:\n\t" (unparse-type cop)
+                                            "\nFunction:\n\t"
+                                            (indent-str-by "\t" (with-out-str (pprint (unparse-type cop))))
                                             "\nArguments:\n\t" (apply println-str (mapv unparse-type cargs))
                                             "Expected:\n\t" (unparse-type P)
                                             "\n\nin:\n\t" e)

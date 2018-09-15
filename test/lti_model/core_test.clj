@@ -37,6 +37,7 @@
   (is (tc ? (+ 1 2)))
   (is (tc-err ? (+ (fn [x] 1) 2)))
   (is (tc-err Int ((fn [x] [x]) 2)))
+  (is (tc Int ((fn [x] x) 2)))
   ; ?, {} |-w app => (All [a b] [[a :-> b] a :-> b])
   ; ?, {} |-w (fn [x] [1 2]) => (Closure {} (fn [x] [1 2]))
   ; ?, {} |-w 1 => Int
@@ -50,6 +51,37 @@
   (is (tc Int (id 1)))
   (is (tc-err (Seq Int) (id 1)))
   (is (tc ? (app id 1)))
-  ;;FIXME
+  (is (tc Int (app id 1)))
+  (is (tc-err (Seq Int) (app id 1)))
   (is (tc ? (app (fn [x] x) 1)))
+  (is (tc Int (app (fn [x] x) 1)))
+  (is (tc-err (Seq Int) (app (fn [x] x) 1)))
+  ; FIXME fishy
+  (is (tc ? (comp inc inc)))
+  (is (tc [Int :-> Int] (comp inc inc)))
+  ; (All [a b c :constraints [[Closure#1 <: [b :-> c]]
+  ;                           [Closure#2 <: [a :-> b]]]]
+  ;   [a :-> c])
+  (is (tc ?
+          (comp (fn [x] x)
+                (fn [x] x))))
+  (is (tc ?
+          ((comp (fn [x] x)
+                 (fn [x] x))
+           1)))
+  (is (tc Int
+          ((comp (fn [x] x)
+                 (fn [x] x))
+           1)))
+  (is (tc-err (Seq Int)
+              ((comp (fn [x] x)
+                     (fn [x] x))
+               1)))
+  ; [Int :-> Int]
+  (is (tc [? :-> ?]
+          (comp (fn [x] x)
+                (fn [x] x))))
+  (is (tc [Int :-> Int]
+          (comp (fn [x] x)
+                (fn [x] x))))
   )
