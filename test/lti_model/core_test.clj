@@ -48,5 +48,6 @@
   (is (tc ? (app (fn [x] [1 2]) 1)))
   (is (tc ? (id 1)))
   (is (tc Int (id 1)))
-  (is (tc (Seq Int) (id 1)))
+  (is (tc-err (Seq Int) (id 1)))
+  (is (tc ? (app id 1)))
   )

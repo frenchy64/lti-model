@@ -1,5 +1,6 @@
 (ns lti-model.core
-  (:require [clojure.set :as set]))
+  (:require [clojure.set :as set]
+            [lti-model.topo :as topo]))
 
 ; e ::=              ; Expressions
 ;     | c            ; constant functions
@@ -466,7 +467,17 @@
      {:xs (t/Set t/Sym)
       :cs (t/Map t/Sym '{:lower T
                          :upper T})
-      :delay (t/Set '{:lower T, :upper T})}))
+      :delay (t/Set '{:lower T, :upper T, :depends (Set Sym), :provides (Set Sym)
+                      :V (Set Sym), :X (Set Sym)})}))
+
+(defn delays->graph [delays]
+  (apply merge-with into
+         (map (fn [{:keys [depends provides]}]
+                (into {}
+                      (map (fn [s]
+                             [s (set provides)]))
+                      depends))
+              delays)))
 
 ;ConstraintSet -> Any
 (defn unparse-cset [cs]
@@ -479,7 +490,9 @@
                       (vals (:cs cs))))
      :delay (into #{} (map (fn [v]
                              {:lower (unparse-type (:lower v))
-                              :upper (unparse-type (:upper v))}))
+                              :upper (unparse-type (:upper v))
+                              :depends (:depends v)
+                              :provides (:provides v)}))
                   (:delay cs))}))
 
 
@@ -503,10 +516,18 @@
 ; (Set Sym) (Set Sym) T T -> C
 (defn delay-constraint [V X s t]
   {:pre [(set? V)
-         (set? X)]}
-  {:xs X
-   :cs {}
-   :delay #{{:V V :X X :lower s :upper t}}})
+         (set? X)
+         (#{:IFn :Poly :Closure} (:op s))
+         (empty? (set/intersection (fv s) X))
+         (= :IFn (:op t))
+         (= 1 (count (:methods t)))]}
+  (let [m (first (:methods t))
+        domv (set/intersection X (into #{} (mapcat fv (:dom m))))
+        rngv (set/intersection X (fv (:rng m)))]
+    {:xs X
+     :cs {}
+     :delay #{{:V V :X X :lower s :upper t
+               :depends domv :provides rngv}}}))
 
 ; (Seqable C) -> C
 (defn intersect-constraints [cs]
@@ -597,12 +618,12 @@
       (let [S (promote V s)]
         (constraint-entry X S (:name t) -any)))
     ; CG-Fun
-    (and (IFn? s)
-         (IFn? t))
+    (IFn? t)
     (cond
-      (= 1
-         (count (:methods s))
-         (count (:methods t)))
+      (and (IFn? s)
+           (= 1
+              (count (:methods s))
+              (count (:methods t))))
       (let [sm (first (:methods s))
             tm (first (:methods t))]
         (when (= (count (:dom sm))
@@ -612,8 +633,12 @@
                             (:dom sm))
                 crng (gen-constraint V X (:rng sm) (:rng tm))]
             (intersect-constraints (cons crng cdoms)))))
-      :else (delay-constraint V X s t))
+      (and (#{:IFn :Poly :Closure} (:op s))
+           (= 1 (count (:methods t))))
+      (delay-constraint V X s t)
+      :else nil)
 
+    #_#_
     (and (= :Closure (:op s))
          (IFn? t))
     (cond
@@ -636,6 +661,17 @@
       :else (assert nil "TODO Closure <: IFn"))
 
     :else (impossible-constraint X)))
+
+(defn subst-with-constraint [X c t]
+  (let [variances (merge (zipmap X (repeat :constant))
+                         (select-keys (fv-variances t) X))
+        sbt (into {}
+                  (map (fn [[n variance]]
+                         [n (case variance
+                              (:contravariant) (get-in c [:cs n :upper] -any)
+                              (get-in c [:cs n :lower] -nothing))]))
+                  variances)]
+    (subst sbt t)))
 
 #_
 (t/ann check [P Env E :-> T])
@@ -702,26 +738,38 @@
                             :Poly (let [gs (Poly-frees cop)
                                         V #{}
                                         X (set (map :name gs))
-                                        body (Poly-body cop gs)]
+                                        body (Poly-body cop gs)
+                                        solve-method
+                                        (fn [P V X m cargs]
+                                          (when (= (count (:dom m))
+                                                   (count cargs))
+                                            (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
+                                                  rng (:rng m)]
+                                              (when-let [exp (largest-matching-sub -any P)]
+                                                (let [crng (gen-constraint V X rng exp)]
+                                                  (when-let [c (intersect-constraints
+                                                                 (cons crng cdom))]
+                                                    (prn "cset" (unparse-cset c))
+                                                    (let [delays (:delay c)
+                                                          gph (delays->graph delays)
+                                                          _ (prn "graph" gph)]
+                                                      ; true if gph is acyclic
+                                                      (when-let [order (topo/kahn-sort gph)]
+                                                        (let [delay-order (mapv
+                                                                            (fn [sym]
+                                                                              (set (filter #(contains? (:depends %) sym) delays)))
+                                                                            order)
+                                                              _ (assert (= (set delays)
+                                                                           (apply set/union delay-order)))
+                                                              c (reduce (fn [c {:keys [V X lower upper]}]
+                                                                          {:pre [(IFn? upper)]}
+                                                                          )
+                                                                        c
+                                                                        (apply concat delay-order))]
+                                                          (subst-with-constraint X c rng))))))))))]
                                     (case (:op body)
                                       :IFn (some (fn [m]
-                                                   (when (= (count (:dom m))
-                                                            (count cargs))
-                                                     (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
-                                                           rng (:rng m)]
-                                                       (when-let [exp (largest-matching-sub -any P)]
-                                                         (let [crng (gen-constraint V X rng exp)]
-                                                           (when-let [c (intersect-constraints
-                                                                          (cons crng cdom))]
-                                                             (let [variances (merge (zipmap X (repeat :constant))
-                                                                                    (select-keys (fv-variances rng) X))
-                                                                   sbt (into {}
-                                                                             (map (fn [[n variance]]
-                                                                                    [n (case variance
-                                                                                         (:contravariant) (get-in c [:cs n :upper] -any)
-                                                                                         (get-in c [:cs n :lower] -nothing))]))
-                                                                             variances)]
-                                                               (subst sbt rng))))))))
+                                                   (solve-method P V X m cargs))
                                                  (:methods body))
                                       nil)))]
                    (or rt
