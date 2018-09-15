@@ -37,5 +37,16 @@
   (is (tc ? (+ 1 2)))
   (is (tc-err ? (+ (fn [x] 1) 2)))
   (is (tc-err Int ((fn [x] [x]) 2)))
+  ; ?, {} |-w app => (All [a b] [[a :-> b] a :-> b])
+  ; ?, {} |-w (fn [x] [1 2]) => (Closure {} (fn [x] [1 2]))
+  ; ?, {} |-w 1 => Int
+  ; {} |-{a,b} (Closure {} (fn [x] [1 2])) <: [a :-> b] => 
+  ; {} |-{a,b} Int <: a => {Int <: a <: Any}
+  ; {} |-{a,b} b <: Any => {Nothing <: b <: Any}
+  ; -------------------------------------
+  ; ?, {} |-w (app (fn [x] [1 2]) 1) => ?
   (is (tc ? (app (fn [x] [1 2]) 1)))
+  (is (tc ? (id 1)))
+  (is (tc Int (id 1)))
+  (is (tc (Seq Int) (id 1)))
   )

@@ -1,4 +1,5 @@
-(ns lti-model.core)
+(ns lti-model.core
+  (:require [clojure.set :as set]))
 
 ; e ::=              ; Expressions
 ;     | c            ; constant functions
@@ -174,11 +175,18 @@
    :types (set ts)})
 
 (defn make-U [ts]
-  (let [ts (set ts)]
-    (case (count ts)
-      1 (first ts)
-      {:op :Union
-       :types ts})))
+  (let [ts (mapcat (fn [t]
+                     (if (= :Union (:op t))
+                       (:types t)
+                       [t]))
+                   ts)
+        ts (disj (set ts)
+                 -nothing)]
+    (cond
+      (contains? ts -any) -any
+      (= (count ts) 1) (first ts)
+      :else {:op :Union
+             :types ts})))
 
 (def -wild {:op :Wild})
 (def -Int {:op :Int})
@@ -249,9 +257,49 @@
              (doall (list* 'IFn methods))))
     (assert nil (str "Cannot unparse type: " (pr-str t)))))
 
+(defn variance? [v]
+  (contains? #{:covariance :contravariant :invariant} v))
+
+(defn fv-variances [t]
+  (let [combine-variances (fn [v1 v2]
+                            {:pre [(variance? v1)
+                                   (variance? v2)]
+                             :post [(variance? %)]}
+                            (if (= v1 v2)
+                              v1
+                              :invariant))
+        flip-variances (fn [v]
+                        {:pre [(variance? v)]
+                         :post [(variance? %)]}
+                        ({:covariant :contravariant
+                          :contravariant :covariant
+                          :invariant :invariant}
+                         v))]
+    (case (:op t)
+      (:Wild :Closure :B :Int) {}
+      :Poly (fv-variances (:type t))
+      :F {(:name t) :covariant}
+      :Scope (fv-variances (:scope t))
+      (:Intersection :Union) (apply merge-with combine-variances (map fv-variances (:types t)))
+      :Seq (fv-variances (:type t))
+      :Fn (let [dom (apply merge-with combine-variances
+                           (map (fn [t]
+                                  (let [vs (fv-variances t)]
+                                    (zipmap (keys vs)
+                                            (map flip-variances (vals vs)))))
+                                (:dom t)))
+                rng (fv-variances (:rng t))]
+            (merge-with combine-variances dom rng))
+      :IFn (apply merge-with combine-variances (map fv-variances (:methods t)))
+      (assert nil (str "Cannot find fv for type: " (pr-str t))))))
+
+(defn fv [t]
+  (set (keys (fv-variances t))))
+
 (def constant-type
   {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))
    'app0 (parse-type '(All [a b] [[a :-> b] :-> [a :-> b]]))
+   'id (parse-type '(All [a] [a :-> a]))
    '+ (parse-type '[Int Int :-> Int])
    'comp (parse-type '(All [a b c] [[b :-> c] [a :-> b] :-> [a :-> c]]))
    'every-pred (parse-type '(All [a] [[a :-> Any] [a :-> Any] :-> [a :-> Any]]))
@@ -320,6 +368,7 @@
                         [-nothing -any]
                         [-any -nothing])]
     (case (:op P)
+      :Int P
       :Seq {:op :Seq :type small}
       :IFn {:op :IFn
             :methods (mapv (fn [m]
@@ -339,6 +388,15 @@
     (or (= t P)
         (= -wild P))
     t
+    (and (or (and (= :down dir)
+                  (= -any t))
+             (and (= :up dir)
+                  (= -nothing t)))
+         (or (IFn? P)
+             (= :Seq (:op P))
+             (= :Int (:op P))))
+    (match-dir dir (match-for-prototype dir P) P)
+
     (and (IFn? t)
          (IFn? P))
     (let [matches (mapv #(some
@@ -349,14 +407,6 @@
       (when (every? :op matches)
         {:op :IFn
          :methods matches}))
-
-    (and (or (and (= :up dir)
-                  (= -nothing t))
-             (and (= :down dir)
-                  (= -any t)))
-        (and (IFn? P)
-             (= :Seq (:op P))))
-    (match-dir dir (match-for-prototype dir P) P)
 
     (= :Intersection (:op P))
     (let [matches (mapv #(match-dir dir t %) (:types P))]
@@ -503,10 +553,20 @@
                                  dom)))
             (update :rng #(promote-demote dir V %)))))
 
+(defn subst [sb t]
+  {:pre [(map? sb)
+         (:op t)]
+   :post [(:op t)]}
+  (->> t
+       (abstract-all (vec (keys sb)))
+       (instantiate-all (vec (vals sb)))))
+
 (defn promote [V t]
   (promote-demote :up V t))
 (defn demote [V t]
   (promote-demote :down V t))
+
+(declare check)
 
 ; (Set Sym) (Set Sym) T T -> C
 (defn gen-constraint [V X s t]
@@ -553,6 +613,28 @@
                 crng (gen-constraint V X (:rng sm) (:rng tm))]
             (intersect-constraints (cons crng cdoms)))))
       :else (delay-constraint V X s t))
+
+    (and (= :Closure (:op s))
+         (IFn? t))
+    (cond
+      (= 1
+         (count (:methods t)))
+      (let [check-method (fn [m]
+                           (check {:op :IFn
+                                   :methods [(-> m
+                                                 (update :dom (fn [dom]
+                                                                (mapv #(demote X %) dom)))
+                                                 (update :rng #(subst (zipmap X (repeat -wild)) %)))]}
+                                  (:env s)
+                                  (:expr s)))
+            m (first (:methods t))
+            domfv (set/intersection X (apply set/union (map fv (:dom m))))
+            rngfv (set/intersection X (fv (:rng m)))
+            cm (check-method (first (:methods t)))
+            ]
+        (assert nil (str "TODO Closure csgen: " (unparse-type cm))))
+      :else (assert nil "TODO Closure <: IFn"))
+
     :else (impossible-constraint X)))
 
 #_
@@ -622,29 +704,32 @@
                                         X (set (map :name gs))
                                         body (Poly-body cop gs)]
                                     (case (:op body)
-                                      :IFn (when (= 1 (count (:methods body)))
-                                             (let [m (first (:methods body))]
-                                               (when (= (count (:dom m))
-                                                        (count cargs))
-                                                 (let [_ (prn "cargs" (mapv unparse-type cargs))
-                                                       _ (prn "dom" (mapv unparse-type (:dom m)))
-                                                       cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
-                                                       crng (gen-constraint V X (:rng m) (largest-matching-sub -any P))
-                                                       c (intersect-constraints
-                                                           (cons crng cdom))]
-                                                   (assert nil (str "What now? " 
-                                                                    (pr-str (mapv unparse-cset cdom))
-                                                                    (pr-str (mapv unparse-cset crng))
-                                                                    (pr-str (unparse-cset c))
-                                                                    ))
-                                                   (when c
-                                                     )))))
+                                      :IFn (some (fn [m]
+                                                   (when (= (count (:dom m))
+                                                            (count cargs))
+                                                     (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
+                                                           rng (:rng m)]
+                                                       (when-let [exp (largest-matching-sub -any P)]
+                                                         (let [crng (gen-constraint V X rng exp)]
+                                                           (when-let [c (intersect-constraints
+                                                                          (cons crng cdom))]
+                                                             (let [variances (merge (zipmap X (repeat :constant))
+                                                                                    (select-keys (fv-variances rng) X))
+                                                                   sbt (into {}
+                                                                             (map (fn [[n variance]]
+                                                                                    [n (case variance
+                                                                                         (:contravariant) (get-in c [:cs n :upper] -any)
+                                                                                         (get-in c [:cs n :lower] -nothing))]))
+                                                                             variances)]
+                                                               (subst sbt rng))))))))
+                                                 (:methods body))
                                       nil)))]
                    (or rt
                        (throw (ex-info (str "Could not apply function: "
                                             "\nFunction:\n\t" (unparse-type cop)
                                             "\nArguments:\n\t" (apply println-str (mapv unparse-type cargs))
-                                            "\nin:\n\t" e)
+                                            "Expected:\n\t" (unparse-type P)
+                                            "\n\nin:\n\t" e)
                                        {::type-error true}))))))
     (integer? e) (let [t {:op :Int}
                        m (smallest-matching-super t P)]
