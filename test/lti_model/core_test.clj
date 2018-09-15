@@ -50,4 +50,6 @@
   (is (tc Int (id 1)))
   (is (tc-err (Seq Int) (id 1)))
   (is (tc ? (app id 1)))
+  ;;FIXME
+  (is (tc ? (app (fn [x] x) 1)))
   )
