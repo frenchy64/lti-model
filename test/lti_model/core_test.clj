@@ -84,4 +84,10 @@
   (is (tc [Int :-> Int]
           (comp (fn [x] x)
                 (fn [x] x))))
+
+  ; Transducers
+  (is (tc ?
+          (mapT inc)))
+  (is (tc ?
+          (mapT (fn [x] x))))
   )

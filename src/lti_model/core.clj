@@ -96,21 +96,34 @@
   (letfn [(name-to [outer t]
             {:pre [(:op t)
                    (integer? outer)]}
-            (case (:op t)
-              :F (if (= n (:name t))
-                   {:op :B
-                    :index outer}
-                   t)
-              :Fn (-> t
-                      (update :dom #(mapv (fn [t]
-                                            (name-to outer t))
-                                          %))
-                      (update :rng #(name-to outer %)))
-              :IFn (update t :methods #(mapv (fn [t]
-                                               (name-to outer t))
-                                             %))
-              :Scope (update t :scope #(name-to (inc outer) %))
-              t))]
+            (let [nt #(name-to outer %)
+                  ntv #(mapv nt %)]
+              (case (:op t)
+                (:Wild :Closure :B :Int) t
+                :Union (make-U (map nt (:types t)))
+                :Intersection (update t :types #(into #{} (map nt %)))
+                :Seq (update t :type nt)
+                :F (if (= n (:name t))
+                     {:op :B
+                      :index outer}
+                     t)
+                :Poly (-> t
+                          (update :type nt)
+                          (update :constraints (fn [cs]
+                                                 (mapv #(-> %
+                                                            (update :lower nt)
+                                                            (update :upper nt))
+                                                       cs)))
+                          (update :bounds (fn [bs]
+                                            (mapv #(-> %
+                                                       (update :lower nt)
+                                                       (update :upper nt))
+                                                  bs))))
+                :Fn (-> t
+                        (update :dom ntv)
+                        (update :rng nt))
+                :IFn (update t :methods ntv)
+                :Scope (update t :scope #(name-to (inc outer) %)))))]
     {:op :Scope
      :scope (name-to 0 t)}))
 
@@ -128,20 +141,33 @@
   (letfn [(replace [outer t]
             {:pre [(integer? outer)]
              :post [(:op %)]}
-            (case (:op t)
-              :B (if (= outer (:index t))
-                   image
-                   t)
-              :Fn (-> t
-                      (update :dom #(mapv (fn [t]
-                                            (replace outer t))
-                                          %))
-                      (update :rng #(replace outer %)))
-              :IFn (update t :methods #(mapv (fn [t]
-                                               (replace outer t))
-                                             %))
-              :Scope (update t :scope #(replace (inc outer) %))
-              t))]
+            (let [rp #(replace outer %)
+                  rpv #(mapv rp %)]
+              (case (:op t)
+                (:Wild :Closure :F :Int) t
+                :Union (make-U (map rp (:types t)))
+                :Intersection (update t :types #(into #{} (map rp %)))
+                :Seq (update t :type rp)
+                :Poly (-> t
+                          (update :type rp)
+                          (update :constraints (fn [cs]
+                                                 (mapv #(-> %
+                                                            (update :lower rp)
+                                                            (update :upper rp))
+                                                       cs)))
+                          (update :bounds (fn [bs]
+                                            (mapv #(-> %
+                                                       (update :lower rp)
+                                                       (update :upper rp))
+                                                  bs))))
+                :B (if (= outer (:index t))
+                     image
+                     t)
+                :Fn (-> t
+                        (update :dom rpv)
+                        (update :rng rp))
+                :IFn (update t :methods rpv)
+                :Scope (update t :scope #(replace (inc outer) %)))))]
     (replace 0 (:scope t))))
 
 (defn instantiate-all [images t]
@@ -166,6 +192,15 @@
               (update :upper #(instantiate-all images %))))
         (:constraints p)))
 
+(defn Poly-bounds [p images]
+  {:pre [(= :Poly (:op p))
+         (= (count images) (count (:bounds p)))]}
+  (mapv (fn [b]
+          (-> b
+              (update :lower #(instantiate-all images %))
+              (update :upper #(instantiate-all images %))))
+        (:bounds p)))
+
 ; Poly -> (Vec '{:op ':F})
 (defn Poly-frees [p]
   {:pre [(= :Poly (:op p))]}
@@ -178,21 +213,32 @@
 (declare parse-type)
 
 ; (Seqable Sym) Type -> Poly
-(defn Poly* [syms t & {:keys [constraints original-names]}]
+(defn Poly* [syms t & {:keys [constraints original-names bounds]}]
   {:pre [(every? symbol? syms)
+         (apply distinct? syms)
          (vector? syms)
          (:op t)
          (or (nil? original-names)
-             (= (count syms) (count original-names)))]}
+             (= (count syms) (count original-names)))
+         (or (nil? bounds)
+             (= (count syms) (count bounds)))
+         ]}
   (let [ab (abstract-all syms t)
         constraints (mapv (fn [c]
                             (-> c
                                 (select-keys [:lower :upper])
                                 (update :lower #(abstract-all syms %))
                                 (update :upper #(abstract-all syms %))))
-                          constraints)]
+                          constraints)
+        bounds (mapv (fn [b]
+                       (-> b
+                           (update :lower #(abstract-all syms %))
+                           (update :upper #(abstract-all syms %))))
+                     (or bounds
+                         (repeat (count syms) {:lower -nothing :upper -any})))]
     {:op :Poly
      :syms (or original-names (vec syms))
+     :bounds bounds
      :constraints constraints
      :type ab}))
 
@@ -219,6 +265,7 @@
 (def -any {:op :Intersection :types #{}})
 (def -nothing {:op :Union :types #{}})
 (defn IFn? [t] (= :IFn (:op t)))
+(defn Poly? [t] (= :Poly (:op t)))
 (defn Fn? [t] (= :Fn (:op t)))
 
 ; Any -> T
@@ -271,7 +318,19 @@
                                     [(unparse-type lower) :< (unparse-type upper)])
                                   (Poly-constraints t gs))]
             (list 'All
-                  (into (mapv (some-fn :original-name :name) gs)
+                  (into (mapv (fn [v b]
+                                (let [n ((some-fn :original-name :name) v)]
+                                  (cond
+                                    (and (= -any (:upper b))
+                                         (= -nothing (:lower b)))
+                                    n
+                                    (= -any (:upper b))
+                                    [n :> (unparse-type (:lower b))]
+                                    (= -nothing (:lower b))
+                                    [n :< (unparse-type (:upper b))]
+                                    :else 
+                                    [n :> (unparse-type (:lower b)) :< (unparse-type (:upper b))])))
+                              gs (Poly-bounds t gs))
                         (when (seq constraints)
                           (into [:constraints] constraints)))
                   body))
@@ -346,6 +405,7 @@
    'every-pred (parse-type '(All [a] [[a :-> Any] [a :-> Any] :-> [a :-> Any]]))
    'partial (parse-type '(All [a b c] [[a b :-> c] a :-> [b :-> c]]))
    'reduce (parse-type '(All [a b c] [[a c :-> a] a (Seq c) :-> a]))
+   'mapT (parse-type '(All [a b] [[a :-> b] :-> (All [r] [[r b :-> r] :-> [r a :-> r]])]))
    })
 
 (declare subtype?)
@@ -576,6 +636,7 @@
 ; (Seqable C) -> C
 (defn intersect-constraints [cs]
   (when (every? map? cs)
+    (prn "intersect-constraints delay" (apply set/union (map :delay cs)))
     (let [imp? (atom nil)
           c {:xs (apply set/union (map :xs cs))
              :cs (apply merge-with
@@ -611,14 +672,24 @@
     :Poly (let [gs (Poly-frees t)
                 body (Poly-body t gs)
                 constraints (Poly-constraints t gs)
+                bounds (Poly-bounds t gs)
                 pbody (promote-demote dir V body)
                 pconstraints (mapv (fn [c]
                                      ;; FIXME which directions for constraints?
                                      (-> c
                                          (update :lower #(promote-demote dir V %))
                                          (update :upper #(promote-demote dir V %))))
-                                   constraints)]
-            (Poly* (map :name gs) pbody :constraints pconstraints))
+                                   constraints)
+                pbounds (mapv (fn [b]
+                                ;; FIXME which directions for bounds?
+                                (-> b
+                                    (update :lower #(promote-demote dir V %))
+                                    (update :upper #(promote-demote dir V %))))
+                              bounds)]
+            (Poly* (mapv :name gs) pbody
+                   :original-names (mapv :original-name gs)
+                   :constraints pconstraints
+                   :bounds bounds))
     :IFn (update t :methods (fn [ms]
                               (mapv #(promote-demote dir V %) ms)))
     :Fn (-> t
@@ -649,6 +720,9 @@
          (:op s)
          (:op t)]
    :post [((some-fn map? nil?) %)]}
+  (prn "gen-constraint")
+  (prn "s" (unparse-type s))
+  (prn "t" (unparse-type t))
   (cond
     (= s t) (trivial-constraint X)
     ; CG-Top
@@ -701,6 +775,7 @@
 (defn order-delays [delays]
   {:pre [(every? (comp set? :depends) delays)
          (every? (comp set? :provides) delays)]}
+  (prn "order-delays" delays)
   (when-let [order (topo/kahn-sort (delays->graph delays))]
     (let [delay-order (mapv
                         (fn [sym]
@@ -712,6 +787,12 @@
   (apply str
          (interpose (str "\n" ind)
                     (str/split-lines s))))
+
+(defn scoped-pred [pred t]
+  {:pre [(:op t)]}
+  (if (= :Scope (:op t))
+    (recur pred (:scope t))
+    (pred t)))
 
 #_
 (t/ann check [P Env E :-> T])
@@ -761,7 +842,7 @@
                                                     {::type-error true})))]
                       t)
                  (let [solve-method (fn solve-method [P cop cargs]
-                                      ;(prn "solve-method"  (:op cop))
+                                      (prn "solve-method"  (:op cop))
                                       (case (:op cop)
                                         ;; TODO unions of functions
                                         :Closure (let [ifn (check {:op :IFn
@@ -786,10 +867,15 @@
                                                     X (set (map :name gs))
                                                     body (Poly-body cop gs)
                                                     existing-c (intersect-constraints
-                                                                 (map #(delay-constraint V X (:lower %) (:upper %))
-                                                                      (Poly-constraints cop gs)))
+                                                                 (concat
+                                                                   (map #(delay-constraint V X (:lower %) (:upper %))
+                                                                        (Poly-constraints cop gs))
+                                                                   (map (fn [{:keys [lower upper]}]
+                                                                          (gen-constraint V X lower upper))
+                                                                        (Poly-bounds cop gs))))
                                                     solve-pmethod
                                                     (fn [m]
+                                                      (prn "solve-pmethod" (unparse-type m))
                                                       (when (= (count (:dom m))
                                                                (count cargs))
                                                         (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
@@ -800,6 +886,7 @@
                                                                              (concat [crng existing-c] cdom))]
                                                                 ; true if X's in delays are acyclic
                                                                 (when-let [order (order-delays (:delay c))]
+                                                                  (prn "order" order)
                                                                   (when-let [c (reduce (fn [c {:keys [V X lower upper] :as dly}]
                                                                                          {:pre [(IFn? upper)
                                                                                                 (= 1 (count (:methods upper)))]}
@@ -820,12 +907,51 @@
                                                                                        c
                                                                                        order)]
                                                                     (cond
-                                                                      (IFn? rng) (Poly* (mapv :name gs) rng
-                                                                                        :constraints order
-                                                                                        :original-names (mapv :original-name gs))
+                                                                      (IFn? rng)
+                                                                      (Poly* (mapv :name gs) rng
+                                                                             :bounds (let [v->b (merge (zipmap X (repeat {:lower -nothing
+                                                                                                                          :upper -any}))
+                                                                                                       (select-keys (:cs c) X))]
+                                                                                       (mapv (comp #(select-keys % [:lower :upper])
+                                                                                                   v->b)
+                                                                                             X))
+                                                                             :constraints order
+                                                                             :original-names (mapv :original-name gs))
+                                                                      (and (Poly? rng)
+                                                                           (scoped-pred IFn? (:type rng)))
+                                                                      (let [rng-gs (Poly-frees rng)
+                                                                            rng-body (Poly-body rng rng-gs)
+                                                                            rng-cs (Poly-constraints rng rng-gs)
+                                                                            rng-bounds (Poly-bounds rng rng-gs)
+                                                                            uniquify-onames (fn [names]
+                                                                                              (let [fqs (frequencies names)]
+                                                                                                (mapv (fn [sym]
+                                                                                                        {:pre [(contains? fqs sym)]}
+                                                                                                        (if (= 1 (fqs sym))
+                                                                                                          sym
+                                                                                                          (loop [sym (symbol (str sym "'"))]
+                                                                                                            (if (contains? fqs sym)
+                                                                                                              (recur (symbol (str sym "'")))
+                                                                                                              sym))))
+                                                                                                      names)))
+                                                                            names (into (mapv :name gs)
+                                                                                        (map :name rng-gs))]
+                                                                        (Poly* names
+                                                                               rng-body
+                                                                               :constraints (into order rng-cs)
+                                                                               :bounds (let [v->b (merge (zipmap X (repeat {:lower -nothing
+                                                                                                                            :upper -any}))
+                                                                                                         (select-keys (:cs c) X))]
+                                                                                         (into (mapv (comp #(select-keys % [:lower :upper])
+                                                                                                           v->b)
+                                                                                                     X)
+                                                                                               rng-bounds))
+                                                                               :original-names (uniquify-onames
+                                                                                                 (into (mapv :original-name gs)
+                                                                                                       (map :original-name rng-gs)))))
                                                                       (not (#{:Union :Intersection :Poly} (:op rng)))
                                                                       (subst-with-constraint X c rng)
-                                                                      :else (do (prn "TODO return too complex")
+                                                                      :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
                                                                                 nil))))))))))]
                                                 (case (:op body)
                                                   :IFn (some solve-pmethod (:methods body))
