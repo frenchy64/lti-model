@@ -34,14 +34,14 @@
   (is (= '(Closure {} (fn [x] [1 2]))
          (tc ? (fn [x] [1 2]))))
   ;; FIXME
-  (is (tc [? :-> Int] (fn [x] 1)))
+  (is (= '[Nothing :-> Int]
+         (tc [? :-> Int] (fn [x] 1))))
   (is (= '[Int :-> Int]
          (tc [Int :-> Int] (fn [x] x))))
   (is (tc-err [Int :-> Nothing] (fn [x] x)))
-  ;; FIXME
   (is (tc-err [? :-> Int] (fn [x] [1 2])))
-  ;; FIXME
-  (is (tc [? :-> (Seq Int)] (fn [x] [1 2])))
+  (is (= '[Nothing :-> (Seq Int)]
+         (tc [? :-> (Seq Int)] (fn [x] [1 2]))))
   (is (tc-err [Int :-> Int] (fn [x] [1 2])))
   (is (= '(Seq Int)
          (tc ? ((fn [x] [1 2]) 1))))

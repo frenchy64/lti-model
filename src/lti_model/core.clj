@@ -830,13 +830,15 @@
                                                                            {::type-error true})))
                                                          (prn "checking lambda" e)
                                                          (prn "method" (unparse-type m))
-                                                         (let [env (merge env (zipmap plist 
-                                                                                      ;TODO demote wildcards
-                                                                                      (:dom m)))
+                                                         (let [;demote wildcards
+                                                               ddom (mapv #(demote #{} %) (:dom m))
+                                                               env (merge env (zipmap plist ddom))
                                                                rng (check (:rng m) env body)]
-                                                           ;; TODO demote wildcards in dom
-                                                           (assoc m :rng rng)))
+                                                           (assoc m
+                                                                  :dom ddom
+                                                                  :rng rng)))
                                                        (:methods P))}
+                              ;; TODO Poly
                               (= -any P) -any
                               :else (throw (ex-info (str "Function does not match expected type:"
                                                          "\nExpected:\n\t" (unparse-type P)
@@ -960,6 +962,8 @@
                                                                     :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
                                                                               nil))]
                                                          (when-let [smret (smallest-matching-super synth-res P)]
+                                                           (prn "synth-res" (unparse-type synth-res))
+                                                           (prn "P" (unparse-type P))
                                                            (prn "smret" (unparse-type smret))
                                                            smret
                                                            #_(assert nil "TODO")))))))))))]
