@@ -101,7 +101,7 @@
               (case (:op t)
                 (:Wild :Closure :B :Int) t
                 :Union (make-U (map nt (:types t)))
-                :Intersection (update t :types #(into #{} (map nt %)))
+                :Intersection (make-I (map nt (:types t)))
                 :Seq (update t :type nt)
                 :F (if (= n (:name t))
                      {:op :B
@@ -146,7 +146,7 @@
               (case (:op t)
                 (:Wild :Closure :F :Int) t
                 :Union (make-U (map rp (:types t)))
-                :Intersection (update t :types #(into #{} (map rp %)))
+                :Intersection (make-I (map rp (:types t)))
                 :Seq (update t :type rp)
                 :Poly (-> t
                           (update :type rp)
@@ -243,8 +243,18 @@
      :type ab}))
 
 (defn make-I [ts]
-  {:op :Intersection
-   :types (set ts)})
+  (let [ts (mapcat (fn [t]
+                     (if (= :Intersection (:op t))
+                       (:types t)
+                       [t]))
+                   ts)
+        ts (disj (set ts)
+                 -any)]
+    (cond
+      (contains? ts -nothing) -nothing
+      (= (count ts) 1) (first ts)
+      :else {:op :Intersection
+             :types ts})))
 
 (defn make-U [ts]
   (let [ts (mapcat (fn [t]
@@ -280,10 +290,8 @@
       (vector? t) {:op :IFn
                    :methods [(parse-fn-arity t)]}
       (seq? t) (case (first t)
-                 U {:op :Union
-                    :types (into #{} (map parse-type) (rest t))}
-                 I {:op :Intersection
-                    :types (into #{} (map parse-type) (rest t))}
+                 U (make-U (map parse-type (rest t)))
+                 I (make-I (map parse-type (rest t)))
                  Seq {:op :Seq
                       :type (parse-type (second t))}
                  All (let [[syms t] (rest t)]
@@ -406,6 +414,7 @@
    'partial (parse-type '(All [a b c] [[a b :-> c] a :-> [b :-> c]]))
    'reduce (parse-type '(All [a b c] [[a c :-> a] a (Seq c) :-> a]))
    'mapT (parse-type '(All [a b] [[a :-> b] :-> (All [r] [[r b :-> r] :-> [r a :-> r]])]))
+   'intoT (parse-type '(All [a b] [(Seq b) (All [r] [[r b :-> r] :-> [r a :-> r]]) (Seq a) :-> (Seq b)]))
    })
 
 (declare subtype?)
@@ -464,20 +473,6 @@
            :dom dom
            :rng rng})))))
 
-(defn match-for-prototype [dir P]
-  (let [[small large] (if (= :up dir)
-                        [-nothing -any]
-                        [-any -nothing])]
-    (case (:op P)
-      :Int P
-      :Seq {:op :Seq :type small}
-      :IFn {:op :IFn
-            :methods (mapv (fn [m]
-                             (-> m
-                                 (update :dom #(repeat (count %) large))
-                                 (assoc :rng small)))
-                           (:types P))})))
-
 ; T P -> T
 (defn match-dir
   "Returns smallest supertype of t that matches P if direction is :up.
@@ -489,14 +484,11 @@
     (or (= t P)
         (= -wild P))
     t
-    (and (or (and (= :down dir)
-                  (= -any t))
-             (and (= :up dir)
-                  (= -nothing t)))
-         (or (IFn? P)
-             (= :Seq (:op P))
-             (= :Int (:op P))))
-    (match-dir dir (match-for-prototype dir P) P)
+
+    (#{[:down -any]
+       [:up -nothing]}
+      [dir t])
+    (promote-demote (flip-dir dir) #{} P)
 
     (and (IFn? t)
          (IFn? P))
@@ -512,8 +504,7 @@
     (= :Intersection (:op P))
     (let [matches (mapv #(match-dir dir t %) (:types P))]
       (when (every? :op matches)
-        {:op :Intersection
-         :types (set matches)}))
+        (make-I (set matches))))
     (= :Union (:op P))
     (let [matches (mapv #(match-dir dir t %) (:types P))]
       (when (some :op matches)
@@ -528,8 +519,7 @@
     (= :Intersection (:op t))
     (let [matches (mapv #(match-dir dir % P) (:types t))]
       (when (some :op matches)
-        {:op :Intersection
-         :types (set (remove nil? matches))}))
+        (make-I (remove nil? matches))))
 
     ; (Seq Int) ^ (Seq ?) => (Seq Int)
     ; (Seq Any) ^ (Seq ?) => (Seq Any)
@@ -660,9 +650,13 @@
    :post [(:op t)]}
   (case (:op t)
     :Union (make-U (mapv #(promote-demote dir V %) (:types t)))
-    :Intersection {:op :Intersection
-                   :types (mapv #(promote-demote dir V %) (:types t))}
+    :Intersection (make-I (mapv #(promote-demote dir V %) (:types t)))
+    ;; handy for match-dir
+    :Wild (if (= :up dir)
+            -any
+            -nothing)
     :F (if (V (:name t))
+         ; FIXME use bounds
          (if (= :up dir)
            -any
            -nothing)
@@ -713,6 +707,7 @@
 
 (declare check)
 
+; FIXME V should carry its bounds for promote/demote
 ; (Set Sym) (Set Sym) T T -> C
 (defn gen-constraint [V X s t]
   {:pre [(set? V)
@@ -882,6 +877,7 @@
                                                               rng (:rng m)]
                                                           (when-let [exp (largest-matching-sub -any P)]
                                                             (let [crng (gen-constraint V X rng exp)]
+                                                              (prn "crng" (some? crng))
                                                               (when-let [c (intersect-constraints
                                                                              (concat [crng existing-c] cdom))]
                                                                 ; true if X's in delays are acyclic

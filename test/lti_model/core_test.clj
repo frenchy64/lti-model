@@ -46,33 +46,43 @@
   ; {} |-{a,b} b <: Any => {Nothing <: b <: Any}
   ; -------------------------------------
   ; ?, {} |-w (app (fn [x] [1 2]) 1) => ?
-  (is (tc ? (app (fn [x] [1 2]) 1)))
-  (is (tc ? (id 1)))
-  (is (tc Int (id 1)))
+  (is (= '(Seq Int)
+         (tc ? (app (fn [x] [1 2]) 1))))
+  (is (= 'Int
+         (tc ? (id 1))))
+  (is (= 'Int
+         (tc Int (id 1))))
   (is (tc-err (Seq Int) (id 1)))
-  (is (tc ? (app id 1)))
-  (is (tc Int (app id 1)))
+  (is (= 'Int
+         (tc ? (app id 1))))
+  (is (= 'Int
+         (tc Int (app id 1))))
   (is (tc-err (Seq Int) (app id 1)))
-  (is (tc ? (app (fn [x] x) 1)))
-  (is (tc Int (app (fn [x] x) 1)))
+  (is (= 'Int
+         (tc ? (app (fn [x] x) 1))))
+  (is (= 'Int
+         (tc Int (app (fn [x] x) 1))))
   (is (tc-err (Seq Int) (app (fn [x] x) 1)))
   ; FIXME fishy
   (is (tc ? (comp inc inc)))
-  (is (tc [Int :-> Int] (comp inc inc)))
+  (is (= '[Int :-> Int]
+         (tc [Int :-> Int] (comp inc inc))))
   ; (All [a b c :constraints [[Closure#1 <: [b :-> c]]
   ;                           [Closure#2 <: [a :-> b]]]]
   ;   [a :-> c])
   (is (tc ?
           (comp (fn [x] x)
                 (fn [x] x))))
-  (is (tc ?
-          ((comp (fn [x] x)
-                 (fn [x] x))
-           1)))
-  (is (tc Int
-          ((comp (fn [x] x)
-                 (fn [x] x))
-           1)))
+  (is (= 'Int
+         (tc ?
+             ((comp (fn [x] x)
+                    (fn [x] x))
+              1))))
+  (is (= 'Int
+         (tc Int
+             ((comp (fn [x] x)
+                    (fn [x] x))
+              1))))
   (is (tc-err (Seq Int)
               ((comp (fn [x] x)
                      (fn [x] x))
@@ -81,13 +91,21 @@
   (is (tc [? :-> ?]
           (comp (fn [x] x)
                 (fn [x] x))))
-  (is (tc [Int :-> Int]
-          (comp (fn [x] x)
-                (fn [x] x))))
+  (is (= '[Int :-> Int]
+         (tc [Int :-> Int]
+             (comp (fn [x] x)
+                   (fn [x] x)))))
 
   ; Transducers
   (is (tc ?
           (mapT inc)))
+  ; like annotating (Transducer Int Int)
+  (is (tc (All [r] [[r Int :-> r] :-> [r Int :-> r]])
+          (mapT inc)))
   (is (tc ?
           (mapT (fn [x] x))))
+  (is (tc ?
+          (intoT []
+                 (mapT (fn [x] x))
+                 [1 2 3])))
   )
