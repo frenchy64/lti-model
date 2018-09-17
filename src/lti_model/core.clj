@@ -580,11 +580,29 @@
                        (let [dom (:dom m)
                              rng (:rng m)
                              sol (solve-app rng t dom)]
-                         (when-let [ret (smallest-matching-super sol rng)]
-                           (assoc m :rng ret))))
+                         ; FIXME is "smallest" correct here?
+                         (when-let [ret (and sol
+                                             (smallest-matching-super sol rng))]
+                           (assoc m
+                                  ; erase wildcards
+                                  :dom (mapv #(demote #{} %) dom)
+                                  :rng ret))))
                      (:methods P))]
       (when (every? identity sols)
         (assoc P :methods sols)))
+
+    (and (Poly? t)
+         (Poly? P))
+    (let [P-gs (Poly-frees P)
+          P-bounds (Poly-bounds P P-gs)
+          P-constraints (Poly-constraints P P-gs)
+          P-body (Poly-body P P-gs)]
+      (when (and (every? #{{:lower -nothing :upper -any}} P-bounds)
+                 (empty? P-constraints))
+        (when-let [sol (match-dir dir t P-body)]
+          (Poly* (mapv :name P-gs)
+                 sol
+                 :original-names (mapv :original-name P-gs)))))
 
     (and (= :Seq (:op t))
          (= :Seq (:op P)))
@@ -672,11 +690,23 @@
 (defn delay-constraint [V X s t]
   {:pre [(set? V)
          (set? X)
-         (#{:IFn :Poly :Closure} (:op s))
-         (empty? (set/intersection (fv s) X))
-         (= :IFn (:op t))
-         (= 1 (count (:methods t)))]}
-  (let [m (first (:methods t))
+         (or (empty? (set/intersection (fv s) X))
+             (empty? (set/intersection (fv t) X)))]}
+  (let [pattern (or (when (seq (set/intersection (fv s) X))
+                      s)
+                    (when (seq (set/intersection (fv t) X))
+                      t)
+                    t)
+        m (cond
+            (IFn? pattern) (do
+                             (assert (= 1 (count (:methods pattern))))
+                             (first (:methods pattern)))
+            (Poly? pattern) (let [gs (Poly-frees pattern)
+                                  body (Poly-body pattern gs)]
+                              (assert (= 1 (count (:methods body))))
+                              (first (:methods body)))
+            :else (assert nil (str "What is this" (:op pattern))))
+        _ (assert (Fn? m))
         domv (set/intersection X (into #{} (mapcat fv (:dom m))))
         rngv (set/intersection X (fv (:rng m)))]
     {:xs X
@@ -815,6 +845,10 @@
            (= 1 (count (:methods t))))
       (delay-constraint V X s t)
       :else nil)
+    (Poly? t) 
+    (cond
+      (#{:IFn :Poly :Closure} (:op s)) (delay-constraint V X s t)
+      :else nil)
     :else (impossible-constraint X)))
 
 (defn substitution-for-variances [variances bounds]
@@ -903,35 +937,50 @@
                       (when-let [exp (largest-matching-sub -any P)]
                         (prn "expected return" (unparse-type exp))
                         (let [crng (gen-constraint V X rng exp)]
-                          (prn "crng" (unparse-cset crng))
+                          (prn "crng" (some-> crng unparse-cset))
                           (when-let [c (intersect-constraints
                                          (concat [crng existing-c] cdom))]
                             ; true if X's in delays are acyclic
                             (when-let [order (order-delays (:delay c))]
                               ;(prn "order" order)
                               (when-let [c (reduce (fn [c {:keys [V X lower upper] :as dly}]
-                                                     {:pre [(IFn? upper)
-                                                            (= 1 (count (:methods upper)))]}
-                                                     (let [m (first (:methods upper))
-                                                           ddom (mapv #(subst-with-constraint X c %)
-                                                                      (:dom m))
-                                                           rng (:rng m)
-                                                           wrng (subst (zipmap X (repeat -wild))
-                                                                       rng)
-                                                           sol (solve-app wrng lower ddom)
-                                                           _ (prn "sol" (unparse-type sol))
-                                                           c' (gen-constraint V X sol rng)]
-                                                       (if (or (nil? c')
-                                                               (seq (:delay c')))
-                                                         (do
-                                                           (prn "TODO inner cset delay")
-                                                           (reduced nil))
-                                                         (do
-                                                           (prn "c'" (unparse-cset c'))
-                                                           (intersect-constraints
-                                                             [c c'])))))
-                                                   c
-                                                   order)]
+                                                     {:pre [(or (empty? (set/intersection (fv lower) X))
+                                                                (empty? (set/intersection (fv upper) X)))]}
+                                                     (or
+                                                       (let [pattern (or (when (seq (set/intersection (fv lower) X))
+                                                                           lower)
+                                                                         (when (seq (set/intersection (fv upper) X))
+                                                                           upper)
+                                                                         upper)
+                                                             m (cond
+                                                                 (IFn? pattern) (do
+                                                                                  (assert (= 1 (count (:methods pattern))))
+                                                                                  (first (:methods pattern)))
+                                                                 (Poly? pattern) (let [gs (Poly-frees pattern)
+                                                                                       body (Poly-body pattern gs)]
+                                                                                   (assert (= 1 (count (:methods body))))
+                                                                                   (first (:methods body)))
+                                                                 :else (assert nil (str "What is this" (:op pattern))))
+                                                             ddom (mapv #(subst-with-constraint X c %)
+                                                                        (:dom m))
+                                                             rng (:rng m)
+                                                             wrng (subst (zipmap X (repeat -wild))
+                                                                         rng)]
+                                                         (when-let [sol (solve-app wrng lower ddom)]
+                                                           (let [_ (prn "sol" (unparse-type sol))
+                                                                 c' (gen-constraint V X sol rng)]
+                                                             (if (or (nil? c')
+                                                                     (seq (:delay c')))
+                                                               (do
+                                                                 (prn "TODO inner cset delay")
+                                                                 nil)
+                                                               (do
+                                                                 (prn "c'" (unparse-cset c'))
+                                                                 (intersect-constraints
+                                                                   [c c']))))))
+                                                       (reduced nil)))
+                                                     c
+                                                     order)]
                                 (when-let [synth-res 
                                            (cond
                                              (IFn? rng)
@@ -989,11 +1038,7 @@
                                              :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
                                                        nil))]
                                   (when-let [smret (smallest-matching-super synth-res P)]
-                                    (prn "synth-res" (unparse-type synth-res))
-                                    (prn "P" (unparse-type P))
-                                    (prn "smret" (unparse-type smret))
-                                    smret
-                                    #_(assert nil "TODO")))))))))))]
+                                    smret))))))))))]
     (case (:op body)
       :IFn (some solve-pmethod (:methods body))
       nil))))
