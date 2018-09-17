@@ -88,6 +88,10 @@
   (is (tc ?
           (comp (fn [x] x)
                 (fn [x] x))))
+  (is (= '[Int :-> Int]
+         (tc [Int :-> Int]
+             (comp (fn [x] x)
+                   (fn [x] x)))))
   (is (= 'Int
          (tc ?
              ((comp (fn [x] x)

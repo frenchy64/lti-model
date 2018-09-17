@@ -366,15 +366,35 @@
 (defn variance? [v]
   (contains? #{:covariant :contravariant :invariant} v))
 
+
+(defn merge-fv-variances [& vs]
+  (letfn [(combine-variances [v1 v2]
+            {:pre [(variance? v1)
+                   (variance? v2)]
+             :post [(variance? %)]}
+            (if (= v1 v2)
+              v1
+              :invariant))]
+    (apply merge-with combine-variances vs)))
+
+(declare fv-variances)
+
+(defn Poly-bounds-fv-variances [bounds]
+  (apply merge-fv-variances 
+         (map (fn [{:keys [lower upper]}]
+                (merge-fv-variances (fv-variances lower)
+                                    (fv-variances upper)))
+              bounds)))
+
+(defn Poly-constraints-fv-variances [constraints]
+  (apply merge-fv-variances 
+         (map (fn [{:keys [lower upper]}]
+                (merge-fv-variances (fv-variances lower)
+                                    (fv-variances upper)))
+              constraints)))
+
 (defn fv-variances [t]
-  (let [combine-variances (fn [v1 v2]
-                            {:pre [(variance? v1)
-                                   (variance? v2)]
-                             :post [(variance? %)]}
-                            (if (= v1 v2)
-                              v1
-                              :invariant))
-        flip-variances (fn [v]
+  (let [flip-variances (fn [v]
                         {:pre [(variance? v)]
                          :post [(variance? %)]}
                         ({:covariant :contravariant
@@ -384,20 +404,22 @@
     (case (:op t)
       (:Wild :Closure :B :Int) {}
       ; FIXME :constraints variances?
-      :Poly (fv-variances (:type t))
+      :Poly (merge-fv-variances (fv-variances (:type t))
+                                (Poly-bounds-fv-variances (:bounds t))
+                                (Poly-constraints-fv-variances (:constraints t)))
       :F {(:name t) :covariant}
       :Scope (fv-variances (:scope t))
-      (:Intersection :Union) (apply merge-with combine-variances (map fv-variances (:types t)))
+      (:Intersection :Union) (apply merge-fv-variances (map fv-variances (:types t)))
       :Seq (fv-variances (:type t))
-      :Fn (let [dom (apply merge-with combine-variances
+      :Fn (let [dom (apply merge-fv-variances
                            (map (fn [t]
                                   (let [vs (fv-variances t)]
                                     (zipmap (keys vs)
                                             (map flip-variances (vals vs)))))
                                 (:dom t)))
                 rng (fv-variances (:rng t))]
-            (merge-with combine-variances dom rng))
-      :IFn (apply merge-with combine-variances (map fv-variances (:methods t)))
+            (merge-fv-variances dom rng))
+      :IFn (apply merge-fv-variances (map fv-variances (:methods t)))
       (assert nil (str "Cannot find fv for type: " (pr-str t))))))
 
 (defn fv [t]
@@ -429,6 +451,25 @@
                (map subtype? (:dom t) (:dom s)))
        (subtype? (:rng s) (:rng t))))
 
+(declare substitution-for-variances)
+
+(defn upcast-Poly [t]
+  {:pre [(Poly? t)]}
+  (let [gs (Poly-frees t)
+        gs-names (map :name gs)
+        bounds (Poly-bounds t gs)
+        constraints (Poly-constraints t gs)
+        body (Poly-body t gs)
+        gs-variances (merge
+                       (zipmap gs-names (repeat :constant))
+                       (select-keys
+                         (merge-fv-variances
+                           (Poly-bounds-fv-variances bounds)
+                           (Poly-constraints-fv-variances constraints)
+                           (fv-variances body))
+                         gs-names))
+        sbt (substitution-for-variances gs-variances bounds)]
+    ))
 
 (defn subtype? [s t]
   {:pre [(:op s)
@@ -443,8 +484,8 @@
     (= :Intersection (:op s)) (boolean (some #(subtype? % t) (:types s)))
     (= :Union (:op t)) (some #(subtype? % t) (:types s))
     (= :Union (:op s)) (every? #(subtype? % t) (:types s))
-    (and (= :IFn (:op s))
-         (= :IFn (:op t)))
+    (and (IFn? s)
+         (IFn? t))
     (every? #(boolean
                (some (fn [s] (subtype-Fn? s %))
                      (:types s)))
@@ -491,21 +532,6 @@
     ;; erase wildcards, flip direction so we're closer to t
     (promote-demote (flip-dir dir) #{} P)
 
-    (and (IFn? t)
-         (IFn? P))
-    (let [matches (mapv #(some
-                           (fn [t]
-                             (match-dir-Fn dir t %))
-                           (:methods t))
-                        (:methods P))]
-      (when (every? :op matches)
-        {:op :IFn
-         :methods matches}))
-
-    (and (= :Seq (:op t))
-         (= :Seq (:op P)))
-    (update t :type #(match-dir dir % (:type P)))
-
     (= :Intersection (:op P))
     (let [matches (mapv #(match-dir dir t %) (:types P))]
       (when (every? :op matches)
@@ -516,6 +542,7 @@
         (make-U (set (remove nil? matches)))))
 
     ;FIXME intersection and union could (should?) fold result so it looks like P.
+    ; is that closer, or further from the smallest super/largest sub we're looking for?
 
     ; (Seq Int) ^ (Seq ?) => (Seq Int)
     ; (Seq Any) ^ (Seq ?) => (Seq Any)
@@ -535,6 +562,21 @@
     (let [matches (mapv #(match-dir dir % P) (:types t))]
       (when (every? :op matches)
         (make-U (set matches))))
+
+    (and (IFn? t)
+         (IFn? P))
+    (let [matches (mapv #(some
+                           (fn [t]
+                             (match-dir-Fn dir t %))
+                           (:methods t))
+                        (:methods P))]
+      (when (every? :op matches)
+        {:op :IFn
+         :methods matches}))
+
+    (and (= :Seq (:op t))
+         (= :Seq (:op P)))
+    (update t :type #(match-dir dir % (:type P)))
 
     :else nil))
 
@@ -763,21 +805,31 @@
       :else nil)
     :else (impossible-constraint X)))
 
+(defn substitution-for-variances [variances bounds]
+  (into {}
+        (map (fn [[n variance]]
+               {:pre [(symbol? n)]
+                :post [(:op (second %))]}
+               [n (case variance
+                    (:contravariant) (get-in bounds [n :upper])
+                    (get-in bounds [n :lower]))]))
+        variances))
+
 (defn subst-with-constraint [X c t]
   (let [variances (merge (zipmap X (repeat :constant))
                          (select-keys (fv-variances t) X))
-        sbt (into {}
-                  (map (fn [[n variance]]
-                         [n (case variance
-                              (:contravariant) (get-in c [:cs n :upper] -any)
-                              (get-in c [:cs n :lower] -nothing))]))
-                  variances)]
+        bounds (into {}
+                     (map (fn [x]
+                            [x {:lower (get-in c [:cs x :lower] -nothing)
+                                :upper (get-in c [:cs x :upper] -any)}]))
+                     X)
+        sbt (substitution-for-variances variances bounds)]
     (subst sbt t)))
 
 (defn order-delays [delays]
   {:pre [(every? (comp set? :depends) delays)
          (every? (comp set? :provides) delays)]}
-  (prn "order-delays" delays)
+  ;(prn "order-delays" delays)
   (when-let [order (topo/kahn-sort (delays->graph delays))]
     (let [delay-order (mapv
                         (fn [sym]
@@ -831,6 +883,9 @@
                                                          (prn "checking lambda" e)
                                                          (prn "method" (unparse-type m))
                                                          (let [;demote wildcards
+                                                               ; FIXME if we have wildcards in the domain, it might be more useful to return
+                                                               ; a Closure type after verifying this arity matches. But what if
+                                                               ; we want to attach some information to the Closure type?
                                                                ddom (mapv #(demote #{} %) (:dom m))
                                                                env (merge env (zipmap plist ddom))
                                                                rng (check (:rng m) env body)]
@@ -845,9 +900,9 @@
                                                          "\nin:\n\t" e)
                                                     {::type-error true})))]
                       t)
-                 (let [solve-method
-                       (fn solve-method [P cop cargs]
-                         (prn "solve-method"  (:op cop))
+                 (let [solve-app
+                       (fn solve-app [P cop cargs]
+                         (prn "solve-app"  (:op cop) (unparse-type P) (mapv unparse-type cargs))
                          (case (:op cop)
                            ;; TODO unions of functions
                            :Closure (let [ifn (check {:op :IFn
@@ -868,8 +923,9 @@
                                             (smallest-matching-super (:rng m) P))))
                                       (:methods cop))
                            :Poly (let [gs (Poly-frees cop)
+                                       gs-names (map :name gs)
                                        V #{}
-                                       X (set (map :name gs))
+                                       X (set gs-names)
                                        body (Poly-body cop gs)
                                        existing-c (intersect-constraints
                                                     (concat
@@ -903,56 +959,68 @@
                                                                                   rng (:rng m)
                                                                                   wrng (subst (zipmap X (repeat -wild))
                                                                                               rng)
-                                                                                  sol (solve-method wrng lower ddom)
+                                                                                  sol (solve-app wrng lower ddom)
+                                                                                  _ (prn "sol" (unparse-type sol))
                                                                                   c' (gen-constraint V X sol rng)]
-                                                                              (if (seq (:delay c'))
+                                                                              (if (or (nil? c')
+                                                                                      (seq (:delay c')))
                                                                                 (do
                                                                                   (prn "TODO inner cset delay")
                                                                                   (reduced nil))
-                                                                                (intersect-constraints
-                                                                                  [c c']))))
+                                                                                (do
+                                                                                  (prn "c'" (unparse-cset c'))
+                                                                                  (intersect-constraints
+                                                                                    [c c'])))))
                                                                           c
                                                                           order)]
                                                        (when-let [synth-res 
                                                                   (cond
                                                                     (IFn? rng)
-                                                                    (Poly* (mapv :name gs) rng
-                                                                           :bounds (let [v->b (merge (zipmap X (repeat {:lower -nothing
-                                                                                                                        :upper -any}))
-                                                                                                     (select-keys (:cs c) X))]
-                                                                                     (mapv (comp #(select-keys % [:lower :upper])
-                                                                                                 v->b)
-                                                                                           X))
-                                                                           :constraints order
-                                                                           :original-names (mapv :original-name gs))
-                                                                    (and (Poly? rng)
-                                                                         (scoped-pred IFn? (:type rng)))
+                                                                    (let [bounds (let [v->b (merge (zipmap gs-names (repeat {:lower -nothing
+                                                                                                                             :upper -any}))
+                                                                                                   (select-keys (:cs c) gs-names))]
+                                                                                   (mapv (comp #(select-keys % [:lower :upper])
+                                                                                               v->b)
+                                                                                         gs-names))]
+                                                                      (Poly* (mapv :name gs)
+                                                                             rng
+                                                                             :bounds bounds
+                                                                             :constraints order
+                                                                             :original-names (mapv :original-name gs)))
+                                                                    (Poly? rng)
                                                                     (let [rng-gs (Poly-frees rng)
                                                                           rng-body (Poly-body rng rng-gs)
+                                                                          _ (assert (IFn? rng-body))
                                                                           rng-cs (Poly-constraints rng rng-gs)
                                                                           rng-bounds (Poly-bounds rng rng-gs)
                                                                           uniquify-onames (fn [names]
-                                                                                            (let [fqs (frequencies names)]
+                                                                                            (let [fqs (atom (frequencies names))]
                                                                                               (mapv (fn [sym]
-                                                                                                      {:pre [(contains? fqs sym)]}
-                                                                                                      (if (= 1 (fqs sym))
-                                                                                                        sym
-                                                                                                        (loop [sym (symbol (str sym "'"))]
-                                                                                                          (if (contains? fqs sym)
-                                                                                                            (recur (symbol (str sym "'")))
-                                                                                                            sym))))
+                                                                                                      {:pre [(contains? @fqs sym)]}
+                                                                                                      (let [osym sym]
+                                                                                                        (if (= 1 (@fqs sym))
+                                                                                                          sym
+                                                                                                          (loop [sym (symbol (str sym "'"))]
+                                                                                                            (if (contains? @fqs sym)
+                                                                                                              (recur (symbol (str sym "'")))
+                                                                                                              (do (swap! fqs 
+                                                                                                                         #(-> %
+                                                                                                                              (assoc sym 1)
+                                                                                                                              (update osym dec)))
+                                                                                                                  sym))))))
                                                                                                     names)))
                                                                           names (into (mapv :name gs)
                                                                                       (map :name rng-gs))]
                                                                       (Poly* names
                                                                              rng-body
                                                                              :constraints (into order rng-cs)
-                                                                             :bounds (let [v->b (merge (zipmap X (repeat {:lower -nothing
-                                                                                                                          :upper -any}))
-                                                                                                       (select-keys (:cs c) X))]
+                                                                             :bounds (let [v->b (merge (zipmap gs-names
+                                                                                                               (repeat {:lower -nothing
+                                                                                                                        :upper -any}))
+                                                                                                       (select-keys (:cs c) gs-names))]
                                                                                        (into (mapv (comp #(select-keys % [:lower :upper])
                                                                                                          v->b)
-                                                                                                   X)
+                                                                                                   gs-names)
                                                                                              rng-bounds))
                                                                              :original-names (uniquify-onames
                                                                                                (into (mapv :original-name gs)
@@ -972,7 +1040,7 @@
                                      nil))))
                        cop (check -wild env op)
                        cargs (mapv #(check -wild env %) args)
-                       rt (solve-method P cop cargs)]
+                       rt (solve-app P cop cargs)]
                    (or rt
                        (throw (ex-info (str "Could not apply function: "
                                             "\nFunction:\n\t"
