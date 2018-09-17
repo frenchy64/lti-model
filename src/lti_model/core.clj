@@ -227,7 +227,9 @@
          (vector? syms)
          (:op t)
          (or (nil? original-names)
-             (= (count syms) (count original-names)))
+             (and (= (count syms) (count original-names))
+                  (every? symbol? original-names)
+                  (apply distinct? original-names)))
          (or (nil? bounds)
              (= (count syms) (count bounds)))
          ]}
@@ -395,12 +397,18 @@
                                     (fv-variances upper)))
               bounds)))
 
+(defn Poly-bounds-fv [bounds]
+  (set (keys (Poly-bounds-fv-variances bounds))))
+
 (defn Poly-constraints-fv-variances [constraints]
   (apply merge-fv-variances 
          (map (fn [{:keys [lower upper]}]
                 (merge-fv-variances (fv-variances lower)
                                     (fv-variances upper)))
               constraints)))
+
+(defn Poly-constraints-fv [constraints]
+  (set (keys (Poly-constraints-fv-variances constraints))))
 
 (defn fv-variances [t]
   (let [flip-variances (fn [v]
@@ -416,7 +424,8 @@
       :Poly (merge-fv-variances (fv-variances (:type t))
                                 (Poly-bounds-fv-variances (:bounds t))
                                 (Poly-constraints-fv-variances (:constraints t)))
-      :F {(:name t) :covariant}
+      :F {(with-meta (:name t) (select-keys t [:original-name]))
+          :covariant}
       :Scope (fv-variances (:scope t))
       (:Intersection :Union) (apply merge-fv-variances (map fv-variances (:types t)))
       :Seq (fv-variances (:type t))
@@ -916,9 +925,28 @@
     (recur pred (:scope t))
     (pred t)))
 
+(defn uniquify-onames [names used-onames]
+  (let [fqs (atom (frequencies names))]
+    (mapv (fn [sym]
+            {:pre [(contains? @fqs sym)]}
+            (let [osym sym]
+              (if (and (= 1 (@fqs sym))
+                       (not (used-onames sym)))
+                sym
+                (loop [sym (symbol (str sym "'"))]
+                  (if (or (contains? @fqs sym)
+                          (used-onames sym))
+                    (recur (symbol (str sym "'")))
+                    (do (swap! fqs 
+                               #(-> %
+                                    (assoc sym 1)
+                                    (update osym dec)))
+                        sym))))))
+          names)))
+
 (defn solve-app [P cop cargs]
   (prn "solve-app" (:op cop))
-  (prn "cop" (unparse-type-verbose cop))
+  (prn "cop" (unparse-type cop))
   (prn "P" (unparse-type P))
   (prn "cargs" (mapv unparse-type cargs))
   (case (:op cop)
@@ -1015,34 +1043,32 @@
                                                                             (select-keys (:cs c) gs-names))]
                                                             (mapv (comp #(select-keys % [:lower :upper])
                                                                         v->b)
-                                                                  gs-names))]
+                                                                  gs-names))
+                                                   constraints order
+                                                   ; avoid reusing these original names, otherwise they will appear to
+                                                   ; be captured by inner bindings in pretty printed types
+                                                   used-onames (set (keep (comp :original-name meta)
+                                                                          (set/union (fv rng)
+                                                                                     (Poly-bounds-fv bounds)
+                                                                                     (Poly-constraints-fv constraints))))]
                                                (Poly* (mapv :name gs)
                                                       rng
                                                       :bounds bounds
-                                                      :constraints order
-                                                      :original-names (mapv :original-name gs)))
+                                                      :constraints constraints
+                                                      :original-names (uniquify-onames
+                                                                        (map :original-name gs)
+                                                                        used-onames)))
                                              (Poly? rng)
-                                             (let [rng-gs (Poly-frees rng)
+                                             (let [
+                                                   ; avoid reusing these original names, otherwise they will appear to
+                                                   ; be captured by inner bindings in pretty printed types
+                                                   used-onames (set (keep (comp :original-name meta) (fv rng)))
+                                                   _ (prn "used-onames" used-onames)
+                                                   rng-gs (Poly-frees rng)
                                                    rng-body (Poly-body rng rng-gs)
                                                    _ (assert (IFn? rng-body))
                                                    rng-cs (Poly-constraints rng rng-gs)
                                                    rng-bounds (Poly-bounds rng rng-gs)
-                                                   uniquify-onames (fn [names]
-                                                                     (let [fqs (atom (frequencies names))]
-                                                                       (mapv (fn [sym]
-                                                                               {:pre [(contains? @fqs sym)]}
-                                                                               (let [osym sym]
-                                                                                 (if (= 1 (@fqs sym))
-                                                                                   sym
-                                                                                   (loop [sym (symbol (str sym "'"))]
-                                                                                     (if (contains? @fqs sym)
-                                                                                       (recur (symbol (str sym "'")))
-                                                                                       (do (swap! fqs 
-                                                                                                  #(-> %
-                                                                                                       (assoc sym 1)
-                                                                                                       (update osym dec)))
-                                                                                           sym))))))
-                                                                             names)))
                                                    names (into (mapv :name gs)
                                                                (map :name rng-gs))]
                                                (Poly* names
@@ -1058,12 +1084,13 @@
                                                                       rng-bounds))
                                                       :original-names (uniquify-onames
                                                                         (into (mapv :original-name gs)
-                                                                              (map :original-name rng-gs)))))
+                                                                              (map :original-name rng-gs))
+                                                                        used-onames)))
                                              (not (#{:Union :Intersection :Poly} (:op rng)))
                                              (subst-with-constraint X c rng)
                                              :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
                                                        nil))]
-                                  (prn "synth-res" (unparse-type-verbose synth-res))
+                                  (prn "synth-res" (unparse-type synth-res))
                                   (when-let [smret (smallest-matching-super synth-res P)]
                                     smret))))))))))]
     (case (:op body)
