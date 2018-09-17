@@ -92,6 +92,9 @@
          (tc [Int :-> Int]
              (comp (fn [x] x)
                    (fn [x] x)))))
+  (is (tc-err [Int :-> (Seq Int)]
+              (comp (fn [x] x)
+                    (fn [x] x))))
   (is (= 'Int
          (tc ?
              ((comp (fn [x] x)

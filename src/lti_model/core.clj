@@ -574,6 +574,18 @@
         {:op :IFn
          :methods matches}))
 
+    (and (Poly? t)
+         (IFn? P))
+    (let [sols (mapv (fn [m]
+                       (let [dom (:dom m)
+                             rng (:rng m)
+                             sol (solve-app rng t dom)]
+                         (when-let [ret (smallest-matching-super sol rng)]
+                           (assoc m :rng ret))))
+                     (:methods P))]
+      (when (every? identity sols)
+        (assoc P :methods sols)))
+
     (and (= :Seq (:op t))
          (= :Seq (:op P)))
     (update t :type #(match-dir dir % (:type P)))
@@ -848,6 +860,144 @@
     (recur pred (:scope t))
     (pred t)))
 
+(defn solve-app [P cop cargs]
+  (prn "solve-app"  (:op cop) (unparse-type P) (mapv unparse-type cargs))
+  (case (:op cop)
+    ;; TODO unions of functions
+    :Closure (let [ifn (check {:op :IFn
+                               :methods [{:op :Fn
+                                          :dom cargs
+                                          :rng P}]}
+                              (:env cop)
+                              (:expr cop))
+                   _ (assert (and (IFn? ifn)
+                                  (= 1 (count (:methods ifn)))))
+                   m (first (:methods ifn))]
+               (:rng m))
+    :IFn (some (fn [m]
+                 {:pre [(Fn? m)]}
+                 (when (= (count cargs)
+                          (count (:dom m)))
+                   (when (every? identity (map subtype? cargs (:dom m)))
+                     (smallest-matching-super (:rng m) P))))
+               (:methods cop))
+    :Poly (let [gs (Poly-frees cop)
+                gs-names (map :name gs)
+                V #{}
+                X (set gs-names)
+                body (Poly-body cop gs)
+                existing-c (intersect-constraints
+                             (concat
+                               (map #(delay-constraint V X (:lower %) (:upper %))
+                                    (Poly-constraints cop gs))
+                               (map (fn [{:keys [lower upper]}]
+                                      (gen-constraint V X lower upper))
+                                    (Poly-bounds cop gs))))
+                solve-pmethod
+                (fn [m]
+                  (prn "solve-pmethod" (unparse-type m))
+                  (when (= (count (:dom m))
+                           (count cargs))
+                    (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
+                          rng (:rng m)]
+                      (when-let [exp (largest-matching-sub -any P)]
+                        (prn "expected return" (unparse-type exp))
+                        (let [crng (gen-constraint V X rng exp)]
+                          (prn "crng" (unparse-cset crng))
+                          (when-let [c (intersect-constraints
+                                         (concat [crng existing-c] cdom))]
+                            ; true if X's in delays are acyclic
+                            (when-let [order (order-delays (:delay c))]
+                              ;(prn "order" order)
+                              (when-let [c (reduce (fn [c {:keys [V X lower upper] :as dly}]
+                                                     {:pre [(IFn? upper)
+                                                            (= 1 (count (:methods upper)))]}
+                                                     (let [m (first (:methods upper))
+                                                           ddom (mapv #(subst-with-constraint X c %)
+                                                                      (:dom m))
+                                                           rng (:rng m)
+                                                           wrng (subst (zipmap X (repeat -wild))
+                                                                       rng)
+                                                           sol (solve-app wrng lower ddom)
+                                                           _ (prn "sol" (unparse-type sol))
+                                                           c' (gen-constraint V X sol rng)]
+                                                       (if (or (nil? c')
+                                                               (seq (:delay c')))
+                                                         (do
+                                                           (prn "TODO inner cset delay")
+                                                           (reduced nil))
+                                                         (do
+                                                           (prn "c'" (unparse-cset c'))
+                                                           (intersect-constraints
+                                                             [c c'])))))
+                                                   c
+                                                   order)]
+                                (when-let [synth-res 
+                                           (cond
+                                             (IFn? rng)
+                                             (let [bounds (let [v->b (merge (zipmap gs-names (repeat {:lower -nothing
+                                                                                                      :upper -any}))
+                                                                            (select-keys (:cs c) gs-names))]
+                                                            (mapv (comp #(select-keys % [:lower :upper])
+                                                                        v->b)
+                                                                  gs-names))]
+                                               (Poly* (mapv :name gs)
+                                                      rng
+                                                      :bounds bounds
+                                                      :constraints order
+                                                      :original-names (mapv :original-name gs)))
+                                             (Poly? rng)
+                                             (let [rng-gs (Poly-frees rng)
+                                                   rng-body (Poly-body rng rng-gs)
+                                                   _ (assert (IFn? rng-body))
+                                                   rng-cs (Poly-constraints rng rng-gs)
+                                                   rng-bounds (Poly-bounds rng rng-gs)
+                                                   uniquify-onames (fn [names]
+                                                                     (let [fqs (atom (frequencies names))]
+                                                                       (mapv (fn [sym]
+                                                                               {:pre [(contains? @fqs sym)]}
+                                                                               (let [osym sym]
+                                                                                 (if (= 1 (@fqs sym))
+                                                                                   sym
+                                                                                   (loop [sym (symbol (str sym "'"))]
+                                                                                     (if (contains? @fqs sym)
+                                                                                       (recur (symbol (str sym "'")))
+                                                                                       (do (swap! fqs 
+                                                                                                  #(-> %
+                                                                                                       (assoc sym 1)
+                                                                                                       (update osym dec)))
+                                                                                           sym))))))
+                                                                             names)))
+                                                   names (into (mapv :name gs)
+                                                               (map :name rng-gs))]
+                                               (Poly* names
+                                                      rng-body
+                                                      :constraints (into order rng-cs)
+                                                      :bounds (let [v->b (merge (zipmap gs-names
+                                                                                        (repeat {:lower -nothing
+                                                                                                 :upper -any}))
+                                                                                (select-keys (:cs c) gs-names))]
+                                                                (into (mapv (comp #(select-keys % [:lower :upper])
+                                                                                  v->b)
+                                                                            gs-names)
+                                                                      rng-bounds))
+                                                      :original-names (uniquify-onames
+                                                                        (into (mapv :original-name gs)
+                                                                              (map :original-name rng-gs)))))
+                                             (not (#{:Union :Intersection :Poly} (:op rng)))
+                                             (subst-with-constraint X c rng)
+                                             :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
+                                                       nil))]
+                                  (when-let [smret (smallest-matching-super synth-res P)]
+                                    (prn "synth-res" (unparse-type synth-res))
+                                    (prn "P" (unparse-type P))
+                                    (prn "smret" (unparse-type smret))
+                                    smret
+                                    #_(assert nil "TODO")))))))))))]
+    (case (:op body)
+      :IFn (some solve-pmethod (:methods body))
+      nil))))
+
 #_
 (t/ann check [P Env E :-> T])
 (defn check [P env e]
@@ -900,145 +1050,7 @@
                                                          "\nin:\n\t" e)
                                                     {::type-error true})))]
                       t)
-                 (let [solve-app
-                       (fn solve-app [P cop cargs]
-                         (prn "solve-app"  (:op cop) (unparse-type P) (mapv unparse-type cargs))
-                         (case (:op cop)
-                           ;; TODO unions of functions
-                           :Closure (let [ifn (check {:op :IFn
-                                                      :methods [{:op :Fn
-                                                                 :dom cargs
-                                                                 :rng P}]}
-                                                     (:env cop)
-                                                     (:expr cop))
-                                          _ (assert (and (IFn? ifn)
-                                                         (= 1 (count (:methods ifn)))))
-                                          m (first (:methods ifn))]
-                                      (:rng m))
-                           :IFn (some (fn [m]
-                                        {:pre [(Fn? m)]}
-                                        (when (= (count cargs)
-                                                 (count (:dom m)))
-                                          (when (every? identity (map subtype? cargs (:dom m)))
-                                            (smallest-matching-super (:rng m) P))))
-                                      (:methods cop))
-                           :Poly (let [gs (Poly-frees cop)
-                                       gs-names (map :name gs)
-                                       V #{}
-                                       X (set gs-names)
-                                       body (Poly-body cop gs)
-                                       existing-c (intersect-constraints
-                                                    (concat
-                                                      (map #(delay-constraint V X (:lower %) (:upper %))
-                                                           (Poly-constraints cop gs))
-                                                      (map (fn [{:keys [lower upper]}]
-                                                             (gen-constraint V X lower upper))
-                                                           (Poly-bounds cop gs))))
-                                       solve-pmethod
-                                       (fn [m]
-                                         (prn "solve-pmethod" (unparse-type m))
-                                         (when (= (count (:dom m))
-                                                  (count cargs))
-                                           (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
-                                                 rng (:rng m)]
-                                             (when-let [exp (largest-matching-sub -any P)]
-                                               (prn "expected return" (unparse-type exp))
-                                               (let [crng (gen-constraint V X rng exp)]
-                                                 (prn "crng" (unparse-cset crng))
-                                                 (when-let [c (intersect-constraints
-                                                                (concat [crng existing-c] cdom))]
-                                                   ; true if X's in delays are acyclic
-                                                   (when-let [order (order-delays (:delay c))]
-                                                     ;(prn "order" order)
-                                                     (when-let [c (reduce (fn [c {:keys [V X lower upper] :as dly}]
-                                                                            {:pre [(IFn? upper)
-                                                                                   (= 1 (count (:methods upper)))]}
-                                                                            (let [m (first (:methods upper))
-                                                                                  ddom (mapv #(subst-with-constraint X c %)
-                                                                                             (:dom m))
-                                                                                  rng (:rng m)
-                                                                                  wrng (subst (zipmap X (repeat -wild))
-                                                                                              rng)
-                                                                                  sol (solve-app wrng lower ddom)
-                                                                                  _ (prn "sol" (unparse-type sol))
-                                                                                  c' (gen-constraint V X sol rng)]
-                                                                              (if (or (nil? c')
-                                                                                      (seq (:delay c')))
-                                                                                (do
-                                                                                  (prn "TODO inner cset delay")
-                                                                                  (reduced nil))
-                                                                                (do
-                                                                                  (prn "c'" (unparse-cset c'))
-                                                                                  (intersect-constraints
-                                                                                    [c c'])))))
-                                                                          c
-                                                                          order)]
-                                                       (when-let [synth-res 
-                                                                  (cond
-                                                                    (IFn? rng)
-                                                                    (let [bounds (let [v->b (merge (zipmap gs-names (repeat {:lower -nothing
-                                                                                                                             :upper -any}))
-                                                                                                   (select-keys (:cs c) gs-names))]
-                                                                                   (mapv (comp #(select-keys % [:lower :upper])
-                                                                                               v->b)
-                                                                                         gs-names))]
-                                                                      (Poly* (mapv :name gs)
-                                                                             rng
-                                                                             :bounds bounds
-                                                                             :constraints order
-                                                                             :original-names (mapv :original-name gs)))
-                                                                    (Poly? rng)
-                                                                    (let [rng-gs (Poly-frees rng)
-                                                                          rng-body (Poly-body rng rng-gs)
-                                                                          _ (assert (IFn? rng-body))
-                                                                          rng-cs (Poly-constraints rng rng-gs)
-                                                                          rng-bounds (Poly-bounds rng rng-gs)
-                                                                          uniquify-onames (fn [names]
-                                                                                            (let [fqs (atom (frequencies names))]
-                                                                                              (mapv (fn [sym]
-                                                                                                      {:pre [(contains? @fqs sym)]}
-                                                                                                      (let [osym sym]
-                                                                                                        (if (= 1 (@fqs sym))
-                                                                                                          sym
-                                                                                                          (loop [sym (symbol (str sym "'"))]
-                                                                                                            (if (contains? @fqs sym)
-                                                                                                              (recur (symbol (str sym "'")))
-                                                                                                              (do (swap! fqs 
-                                                                                                                         #(-> %
-                                                                                                                              (assoc sym 1)
-                                                                                                                              (update osym dec)))
-                                                                                                                  sym))))))
-                                                                                                    names)))
-                                                                          names (into (mapv :name gs)
-                                                                                      (map :name rng-gs))]
-                                                                      (Poly* names
-                                                                             rng-body
-                                                                             :constraints (into order rng-cs)
-                                                                             :bounds (let [v->b (merge (zipmap gs-names
-                                                                                                               (repeat {:lower -nothing
-                                                                                                                        :upper -any}))
-                                                                                                       (select-keys (:cs c) gs-names))]
-                                                                                       (into (mapv (comp #(select-keys % [:lower :upper])
-                                                                                                         v->b)
-                                                                                                   gs-names)
-                                                                                             rng-bounds))
-                                                                             :original-names (uniquify-onames
-                                                                                               (into (mapv :original-name gs)
-                                                                                                     (map :original-name rng-gs)))))
-                                                                    (not (#{:Union :Intersection :Poly} (:op rng)))
-                                                                    (subst-with-constraint X c rng)
-                                                                    :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
-                                                                              nil))]
-                                                         (when-let [smret (smallest-matching-super synth-res P)]
-                                                           (prn "synth-res" (unparse-type synth-res))
-                                                           (prn "P" (unparse-type P))
-                                                           (prn "smret" (unparse-type smret))
-                                                           smret
-                                                           #_(assert nil "TODO")))))))))))]
-                                   (case (:op body)
-                                     :IFn (some solve-pmethod (:methods body))
-                                     nil))))
-                       cop (check -wild env op)
+                 (let [cop (check -wild env op)
                        cargs (mapv #(check -wild env %) args)
                        rt (solve-app P cop cargs)]
                    (or rt
