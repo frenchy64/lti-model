@@ -316,6 +316,12 @@
                [k (unparse-type v)]))
         env))
 
+(def ^:dynamic *verbose-types* nil)
+
+(defn unparse-type-verbose [t]
+  (binding [*verbose-types* true]
+    (unparse-type t)))
+
 ; T -> Any
 (defn unparse-type [t]
   (case (:op t)
@@ -327,22 +333,25 @@
                                   (Poly-constraints t gs))]
             (list 'All
                   (into (mapv (fn [v b]
-                                (let [n ((some-fn :original-name :name) v)]
+                                (let [n ((some-fn #(when-not *verbose-types*
+                                                     (:original-name %))
+                                                  :name) v)]
                                   (cond
                                     (and (= -any (:upper b))
                                          (= -nothing (:lower b)))
                                     n
                                     (= -any (:upper b))
-                                    [n :> (unparse-type (:lower b))]
+                                    [n :lower (unparse-type (:lower b))]
                                     (= -nothing (:lower b))
-                                    [n :< (unparse-type (:upper b))]
+                                    [n :upper (unparse-type (:upper b))]
                                     :else 
-                                    [n :> (unparse-type (:lower b)) :< (unparse-type (:upper b))])))
+                                    [n :lower (unparse-type (:lower b)) :upper (unparse-type (:upper b))])))
                               gs (Poly-bounds t gs))
                         (when (seq constraints)
                           (into [:constraints] constraints)))
                   body))
-    :F (or (:original-name t)
+    :F (or (when (not *verbose-types*)
+             (:original-name t))
            (:name t))
     :B (:index t)
     :Union (if (empty? (:types t))
@@ -686,6 +695,8 @@
 (defn constraint-entry [X s x t]
   {:pre [(set? X)
          (symbol? x)]}
+  (assert (empty? (set/intersection X (set/union (fv s) (fv t))))
+          (set/intersection X (set/union (fv s) (fv t))))
   {:xs (set X)
    :cs {x {:lower s :upper t}}
    :delay #{}})
@@ -695,6 +706,8 @@
          (set? X)
          (or (empty? (set/intersection (fv s) X))
              (empty? (set/intersection (fv t) X)))]}
+  (prn "delay-constraint left fv" (seq (set/intersection (fv s) X)))
+  (prn "delay-constraint left fv" (seq (set/intersection (fv t) X)))
   (let [pattern (or (when (seq (set/intersection (fv s) X))
                       s)
                     (when (seq (set/intersection (fv t) X))
@@ -722,11 +735,14 @@
   (when (every? map? cs)
     ;(prn "intersect-constraints delay" (apply set/union (map :delay cs)))
     (let [imp? (atom nil)
-          c {:xs (apply set/union (map :xs cs))
+          xs (apply set/union (map :xs cs))
+          c {:xs xs
              :cs (apply merge-with
                         (fn [c1 c2]
                           (let [l (make-U [(:lower c1) (:lower c2)])
                                 u (make-I [(:upper c1) (:upper c2)])]
+                            (assert (empty? (set/intersection xs (set/union (fv l) (fv u))))
+                                    (set/intersection xs (set/union (fv l) (fv u))))
                             (when-not (subtype? l u)
                               (reset! imp? true))
                             {:lower l
@@ -809,9 +825,9 @@
          (:op s)
          (:op t)]
    :post [((some-fn map? nil?) %)]}
-  ;(prn "gen-constraint")
-  ;(prn "s" (unparse-type s))
-  ;(prn "t" (unparse-type t))
+  (prn "gen-constraint")
+  (prn "s" (unparse-type-verbose s))
+  (prn "t" (unparse-type-verbose t))
   (cond
     (= s t) (trivial-constraint X)
     ; CG-Top
@@ -819,15 +835,18 @@
     ; CG-Bot
     (= -nothing s) (trivial-constraint X)
     ; CG-Upper
-    (= :F (:op s))
-    (when (contains? X (:name s))
-      (let [T (demote V t)]
-        (constraint-entry X -nothing (:name s) T)))
+    (and (= :F (:op s))
+         (contains? X (:name s)))
+    (let [T (demote V t)]
+      (constraint-entry X -nothing (:name s) T))
     ; CG-Lower
-    (= :F (:op t))
-    (when (contains? X (:name t))
-      (let [S (promote V s)]
-        (constraint-entry X S (:name t) -any)))
+    (and (= :F (:op t))
+         (contains? X (:name t)))
+    (let [S (promote V s)]
+      (constraint-entry X S (:name t) -any))
+    (or (= :F (:op s))
+        (= :F (:op t)))
+    (impossible-constraint X)
     ; CG-Fun
     (IFn? t)
     (cond
@@ -898,7 +917,10 @@
     (pred t)))
 
 (defn solve-app [P cop cargs]
-  (prn "solve-app"  (:op cop) (unparse-type P) (mapv unparse-type cargs))
+  (prn "solve-app" (:op cop))
+  (prn "cop" (unparse-type-verbose cop))
+  (prn "P" (unparse-type P))
+  (prn "cargs" (mapv unparse-type cargs))
   (case (:op cop)
     ;; TODO unions of functions
     :Closure (let [ifn (check {:op :IFn
@@ -1041,6 +1063,7 @@
                                              (subst-with-constraint X c rng)
                                              :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
                                                        nil))]
+                                  (prn "synth-res" (unparse-type-verbose synth-res))
                                   (when-let [smret (smallest-matching-super synth-res P)]
                                     smret))))))))))]
     (case (:op body)
