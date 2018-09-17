@@ -31,8 +31,6 @@
 ; Any = (I)
 ; Nothing = (U)
 
-(declare T)
-
 #_
 (t/defalias Scope
   "Scopes for deBruijn indices"
@@ -90,6 +88,16 @@
   (t/Map t/Sym T))
 
 (def ^:dynamic *tvar* #{})
+
+(declare make-U make-I)
+
+(def -wild {:op :Wild})
+(def -Int {:op :Int})
+(def -any {:op :Intersection :types #{}})
+(def -nothing {:op :Union :types #{}})
+(defn IFn? [t] (= :IFn (:op t)))
+(defn Poly? [t] (= :Poly (:op t)))
+(defn Fn? [t] (= :Fn (:op t)))
 
 ; Name Expr -> Scope
 (defn abstract [n t]
@@ -269,14 +277,6 @@
       (= (count ts) 1) (first ts)
       :else {:op :Union
              :types ts})))
-
-(def -wild {:op :Wild})
-(def -Int {:op :Int})
-(def -any {:op :Intersection :types #{}})
-(def -nothing {:op :Union :types #{}})
-(defn IFn? [t] (= :IFn (:op t)))
-(defn Poly? [t] (= :Poly (:op t)))
-(defn Fn? [t] (= :Fn (:op t)))
 
 ; Any -> T
 (defn parse-type [t]
@@ -513,6 +513,9 @@
           {:op :Fn
            :dom dom
            :rng rng})))))
+
+(declare promote-demote solve-app
+         smallest-matching-super demote)
 
 ; T P -> T
 (defn match-dir
@@ -935,6 +938,7 @@
                     (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
                           rng (:rng m)]
                       (when-let [exp (largest-matching-sub -any P)]
+                        (prn "rng" (unparse-type rng))
                         (prn "expected return" (unparse-type exp))
                         (let [crng (gen-constraint V X rng exp)]
                           (prn "crng" (some-> crng unparse-cset))
