@@ -21,23 +21,36 @@
          false)))
 
 (deftest check-test
-  (is (tc Int 1))
-  (is (tc ? 1))
-  (is (tc ? [1 2]))
+  (is (= 'Int
+         (tc Int 1)))
+  (is (= 'Int
+         (tc ? 1)))
+  (is (= '(Seq Int)
+         (tc ? [1 2])))
   (is (tc-err Int [1 2]))
-  (is (tc Int [1 2]))
-  (is (tc ? (fn [x] [1 2])))
+  (is (tc-err Int [1 2]))
+  (is (= '(Seq Int)
+         (tc (Seq ?) [1 2])))
+  (is (= '(Closure {} (fn [x] [1 2]))
+         (tc ? (fn [x] [1 2]))))
+  ;; FIXME
   (is (tc [? :-> Int] (fn [x] 1)))
-  (is (tc [Int :-> Int] (fn [x] x)))
+  (is (= '[Int :-> Int]
+         (tc [Int :-> Int] (fn [x] x))))
   (is (tc-err [Int :-> Nothing] (fn [x] x)))
-  (is (tc [? :-> Int] (fn [x] [1 2])))
+  ;; FIXME
+  (is (tc-err [? :-> Int] (fn [x] [1 2])))
+  ;; FIXME
   (is (tc [? :-> (Seq Int)] (fn [x] [1 2])))
-  (is (tc [Int :-> Int] (fn [x] [1 2])))
-  (is (tc ? ((fn [x] [1 2]) 1)))
-  (is (tc ? (+ 1 2)))
+  (is (tc-err [Int :-> Int] (fn [x] [1 2])))
+  (is (= '(Seq Int)
+         (tc ? ((fn [x] [1 2]) 1))))
+  (is (= 'Int
+         (tc ? (+ 1 2))))
   (is (tc-err ? (+ (fn [x] 1) 2)))
   (is (tc-err Int ((fn [x] [x]) 2)))
-  (is (tc Int ((fn [x] x) 2)))
+  (is (= 'Int
+         (tc Int ((fn [x] x) 2))))
   ; ?, {} |-w app => (All [a b] [[a :-> b] a :-> b])
   ; ?, {} |-w (fn [x] [1 2]) => (Closure {} (fn [x] [1 2]))
   ; ?, {} |-w 1 => Int
@@ -48,6 +61,8 @@
   ; ?, {} |-w (app (fn [x] [1 2]) 1) => ?
   (is (= '(Seq Int)
          (tc ? (app (fn [x] [1 2]) 1))))
+  (is (= '(Seq Int)
+         (tc (Seq ?) (app (fn [x] [1 2]) 1))))
   (is (= 'Int
          (tc ? (id 1))))
   (is (= 'Int
