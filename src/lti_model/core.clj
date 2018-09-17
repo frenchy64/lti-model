@@ -214,7 +214,7 @@
   {:pre [(= :Poly (:op p))]}
   (mapv (fn [s]
           {:pre [(symbol? s)]}
-          {:op :F :name (gensym s)
+          {:op :F :name (with-meta (gensym s) {:original-name s})
            :original-name s})
         (:syms p)))
 
@@ -508,6 +508,9 @@
                (some (fn [s] (subtype-Fn? s %))
                      (:types s)))
             (:types t))
+    (and (= :Seq (:op s))
+         (= :Seq (:op t)))
+    (subtype? (:type s) (:type t))
     :else false))
 
 (declare match-dir)
@@ -542,6 +545,9 @@
   Returns nil if undefined."
   [dir t P]
   {:post [((some-fn nil? :op) %)]}
+  ;(prn "match-dir" dir)
+  ;(prn "t" (unparse-type t))
+  ;(prn "P" (unparse-type P))
   (cond
     (or (= t P)
         (= -wild P))
@@ -600,7 +606,11 @@
     (let [sols (mapv (fn [m]
                        (let [dom (:dom m)
                              rng (:rng m)
+                             _ (prn "Poly IFn match")
+                             _ (prn "dom" (mapv unparse-type dom))
+                             _ (prn "rng" (unparse-type rng))
                              sol (solve-app rng t dom)]
+                         (prn "sol Poly IFn match" (some-> sol unparse-type))
                          ; FIXME is "smallest" correct here?
                          (when-let [ret (and sol
                                              (smallest-matching-super sol rng))]
@@ -632,7 +642,7 @@
     :else nil))
 
 (defn smallest-matching-super [t P]
-  (prn "smallest-matching-super" (unparse-type t) (unparse-type P))
+  ;(prn "smallest-matching-super" (unparse-type t) (unparse-type P))
   (match-dir :up t P))
 (defn largest-matching-sub [t P]
   (match-dir :down t P))
@@ -678,16 +688,28 @@
 (defn unparse-delays [ds]
   (into #{} (map unparse-delay) ds))
 
+(defn unparse-free-name [s]
+  (or (when-not *verbose-types*
+        (-> s meta :original-name))
+      s))
+
 ;ConstraintSet -> Any
 (defn unparse-cset [cs]
   (when cs
-    {:xs (:xs cs)
-     :cs (zipmap (keys (:cs cs))
+    (let [onames-seq (map unparse-free-name (:xs cs))
+          use-onames? (apply distinct? onames-seq)
+          onames (if use-onames?
+                   (set onames-seq)
+                   (:xs cs))]
+    {:xs onames
+     :cs (zipmap (if use-onames?
+                   onames-seq
+                   (keys (:cs cs)))
                  (map (fn [v]
-                        {:lower (unparse-type (:lower v))
-                         :upper (unparse-type (:upper v))})
+                        {:lower (unparse-type-verbose (:lower v))
+                         :upper (unparse-type-verbose (:upper v))})
                       (vals (:cs cs))))
-     :delay (unparse-delays (:delay cs))}))
+     :delay (unparse-delays (:delay cs))})))
 
 
 ; (Set Sym) -> C
@@ -699,6 +721,7 @@
 ; (Set Sym) -> C
 (defn impossible-constraint [X]
   {:pre [(set? X)]}
+  (prn "impossible")
   nil)
 ; (Set Sym) T Sym T -> C
 (defn constraint-entry [X s x t]
@@ -715,8 +738,6 @@
          (set? X)
          (or (empty? (set/intersection (fv s) X))
              (empty? (set/intersection (fv t) X)))]}
-  (prn "delay-constraint left fv" (seq (set/intersection (fv s) X)))
-  (prn "delay-constraint left fv" (seq (set/intersection (fv t) X)))
   (let [pattern (or (when (seq (set/intersection (fv s) X))
                       s)
                     (when (seq (set/intersection (fv t) X))
@@ -741,6 +762,7 @@
 
 ; (Seqable C) -> C
 (defn intersect-constraints [cs]
+  ;(prn "intersect-constraints")
   (when (every? map? cs)
     ;(prn "intersect-constraints delay" (apply set/union (map :delay cs)))
     (let [imp? (atom nil)
@@ -753,6 +775,9 @@
                             (assert (empty? (set/intersection xs (set/union (fv l) (fv u))))
                                     (set/intersection xs (set/union (fv l) (fv u))))
                             (when-not (subtype? l u)
+                              (prn "impossible (in intersect-constraints)"
+                                   (unparse-type l)
+                                   (unparse-type u))
                               (reset! imp? true))
                             {:lower l
                              :upper u}))
@@ -835,8 +860,10 @@
          (:op t)]
    :post [((some-fn map? nil?) %)]}
   (prn "gen-constraint")
-  (prn "s" (unparse-type-verbose s))
-  (prn "t" (unparse-type-verbose t))
+  (prn "s" (unparse-type s))
+  (prn "t" (unparse-type t))
+  (assert (not= -wild s) s)
+  (assert (not= -wild t) t)
   (cond
     (= s t) (trivial-constraint X)
     ; CG-Top
@@ -944,6 +971,150 @@
                         sym))))))
           names)))
 
+(defn process-delays [c order]
+  (reduce (fn [c {:keys [V X lower upper] :as dly}]
+            {:pre [(or (empty? (set/intersection (fv lower) X))
+                       (empty? (set/intersection (fv upper) X)))]}
+            (prn "process delay")
+            (prn "X" (into #{} (map unparse-free-name) X))
+            (prn "lower" (unparse-type lower))
+            (prn "upper" (unparse-type upper))
+            (or
+              (let [pattern upper
+                    m (cond
+                        (IFn? pattern) (do
+                                         (assert (= 1 (count (:methods pattern))))
+                                         (first (:methods pattern)))
+                        (Poly? pattern) (let [gs (Poly-frees pattern)
+                                              body (Poly-body pattern gs)]
+                                          (assert (= 1 (count (:methods body))))
+                                          (first (:methods body)))
+                        :else (assert nil (str "What is this" (:op pattern))))
+                    ddom (mapv #(subst-with-constraint X c %)
+                               (:dom m))
+                    _ (prn "dom" (mapv unparse-type (:dom m)))
+                    _ (prn "ddom" (mapv unparse-type ddom))
+                    rng (:rng m)
+                    wrng (subst (zipmap X (repeat -wild))
+                                rng)
+                    ]
+                (prn "rng" (unparse-type rng))
+                (prn "wrng" (unparse-type wrng))
+                (when-let [sol (solve-app wrng lower ddom)]
+                  (let [_ (prn "sol" (unparse-type sol))
+                        c' (gen-constraint V X sol rng)]
+                    (if (or (nil? c')
+                            (seq (:delay c')))
+                      (do
+                        (prn "TODO inner cset delay")
+                        nil)
+                      (do
+                        (prn "c'" (unparse-cset c'))
+                        (intersect-constraints
+                          [c c']))))))
+              (reduced nil)))
+          c
+          order))
+
+(defn synthesize-result [X c order rng gs]
+  (let [gs-names (map :name gs)]
+    (cond
+      (IFn? rng)
+      (let [bounds (let [v->b (merge (zipmap gs-names (repeat {:lower -nothing
+                                                               :upper -any}))
+                                     (select-keys (:cs c) gs-names))]
+                     (mapv (comp #(select-keys % [:lower :upper])
+                                 v->b)
+                           gs-names))
+            constraints order
+            ; avoid reusing these original names, otherwise they will appear to
+            ; be captured by inner bindings in pretty printed types
+            used-onames (set (keep (comp :original-name meta)
+                                   (set/difference
+                                     (set/union (fv rng)
+                                                (Poly-bounds-fv bounds)
+                                                (Poly-constraints-fv constraints))
+                                     ;; we're capturing these intentionally, don't rename
+                                     (set (map :name gs)))))]
+        (prn "rng" (unparse-type rng))
+        (prn "used-onames" used-onames)
+        (Poly* (mapv :name gs)
+               rng
+               :bounds bounds
+               :constraints constraints
+               :original-names (uniquify-onames
+                                 (map :original-name gs)
+                                 used-onames)))
+      (Poly? rng)
+      (let [
+            rng-gs (Poly-frees rng)
+            rng-body (Poly-body rng rng-gs)
+            _ (assert (IFn? rng-body))
+            rng-cs (Poly-constraints rng rng-gs)
+            rng-bounds (Poly-bounds rng rng-gs)
+            names (into (mapv :name gs)
+                        (map :name rng-gs))
+            ; avoid reusing these original names, otherwise they will appear to
+            ; be captured by inner bindings in pretty printed types
+            used-onames (set (keep (comp :original-name meta)
+                                   (set/difference
+                                     (fv rng)
+                                     ;; we're capturing these intentionally, don't rename
+                                     (set names))))
+            _ (prn "rng" (unparse-type rng))
+            _ (prn "used-onames" used-onames)
+            ]
+        (Poly* names
+               rng-body
+               :constraints (into order rng-cs)
+               :bounds (let [v->b (merge (zipmap gs-names
+                                                 (repeat {:lower -nothing
+                                                          :upper -any}))
+                                         (select-keys (:cs c) gs-names))]
+                         (into (mapv (comp #(select-keys % [:lower :upper])
+                                           v->b)
+                                     gs-names)
+                               rng-bounds))
+               :original-names (uniquify-onames
+                                 (into (mapv :original-name gs)
+                                       (map :original-name rng-gs))
+                                 used-onames)))
+      (not (#{:Union :Intersection :Poly} (:op rng)))
+      (subst-with-constraint X c rng)
+      :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
+                nil))))
+
+(defn solve-pmethod [V X m P cargs gs existing-c]
+  {:pre [(set? V)
+         (set? X)
+         (:op P)
+         (vector? cargs)
+         (Fn? m)
+         (vector? gs)
+         ((some-fn nil? map?) existing-c)]}
+  (prn "solve-pmethod" (unparse-type m) (unparse-type P) (mapv unparse-type cargs))
+  (when (= (count (:dom m))
+           (count cargs))
+    (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
+          ;_ (prn "cdom" (map unparse-cset cdom))
+          rng (:rng m)]
+      (when-let [exp (largest-matching-sub -any P)]
+        ;(prn "rng" (unparse-type rng))
+        ;(prn "expected return" (unparse-type exp))
+        (let [crng (gen-constraint V X rng exp)]
+          ;(prn "crng" (some-> crng unparse-cset))
+          (when-let [c (intersect-constraints
+                         (concat [crng existing-c] cdom))]
+            ;(prn "intersected" (unparse-cset c))
+            ; true if X's in delays are acyclic
+            (when-let [order (order-delays (:delay c))]
+              ;(prn "order" order)
+              (when-let [c (process-delays c order)]
+                (when-let [synth-res (synthesize-result X c order rng gs)]
+                  (prn "synth-res" (unparse-type synth-res))
+                  (when-let [smret (smallest-matching-super synth-res P)]
+                    smret))))))))))
+
 (defn solve-app [P cop cargs]
   (prn "solve-app" (:op cop))
   (prn "cop" (unparse-type cop))
@@ -980,122 +1151,11 @@
                                (map (fn [{:keys [lower upper]}]
                                       (gen-constraint V X lower upper))
                                     (Poly-bounds cop gs))))
-                solve-pmethod
-                (fn [m]
-                  (prn "solve-pmethod" (unparse-type m))
-                  (when (= (count (:dom m))
-                           (count cargs))
-                    (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
-                          rng (:rng m)]
-                      (when-let [exp (largest-matching-sub -any P)]
-                        (prn "rng" (unparse-type rng))
-                        (prn "expected return" (unparse-type exp))
-                        (let [crng (gen-constraint V X rng exp)]
-                          (prn "crng" (some-> crng unparse-cset))
-                          (when-let [c (intersect-constraints
-                                         (concat [crng existing-c] cdom))]
-                            ; true if X's in delays are acyclic
-                            (when-let [order (order-delays (:delay c))]
-                              ;(prn "order" order)
-                              (when-let [c (reduce (fn [c {:keys [V X lower upper] :as dly}]
-                                                     {:pre [(or (empty? (set/intersection (fv lower) X))
-                                                                (empty? (set/intersection (fv upper) X)))]}
-                                                     (or
-                                                       (let [pattern (or (when (seq (set/intersection (fv lower) X))
-                                                                           lower)
-                                                                         (when (seq (set/intersection (fv upper) X))
-                                                                           upper)
-                                                                         upper)
-                                                             m (cond
-                                                                 (IFn? pattern) (do
-                                                                                  (assert (= 1 (count (:methods pattern))))
-                                                                                  (first (:methods pattern)))
-                                                                 (Poly? pattern) (let [gs (Poly-frees pattern)
-                                                                                       body (Poly-body pattern gs)]
-                                                                                   (assert (= 1 (count (:methods body))))
-                                                                                   (first (:methods body)))
-                                                                 :else (assert nil (str "What is this" (:op pattern))))
-                                                             ddom (mapv #(subst-with-constraint X c %)
-                                                                        (:dom m))
-                                                             rng (:rng m)
-                                                             wrng (subst (zipmap X (repeat -wild))
-                                                                         rng)]
-                                                         (when-let [sol (solve-app wrng lower ddom)]
-                                                           (let [_ (prn "sol" (unparse-type sol))
-                                                                 c' (gen-constraint V X sol rng)]
-                                                             (if (or (nil? c')
-                                                                     (seq (:delay c')))
-                                                               (do
-                                                                 (prn "TODO inner cset delay")
-                                                                 nil)
-                                                               (do
-                                                                 (prn "c'" (unparse-cset c'))
-                                                                 (intersect-constraints
-                                                                   [c c']))))))
-                                                       (reduced nil)))
-                                                     c
-                                                     order)]
-                                (when-let [synth-res 
-                                           (cond
-                                             (IFn? rng)
-                                             (let [bounds (let [v->b (merge (zipmap gs-names (repeat {:lower -nothing
-                                                                                                      :upper -any}))
-                                                                            (select-keys (:cs c) gs-names))]
-                                                            (mapv (comp #(select-keys % [:lower :upper])
-                                                                        v->b)
-                                                                  gs-names))
-                                                   constraints order
-                                                   ; avoid reusing these original names, otherwise they will appear to
-                                                   ; be captured by inner bindings in pretty printed types
-                                                   used-onames (set (keep (comp :original-name meta)
-                                                                          (set/union (fv rng)
-                                                                                     (Poly-bounds-fv bounds)
-                                                                                     (Poly-constraints-fv constraints))))]
-                                               (Poly* (mapv :name gs)
-                                                      rng
-                                                      :bounds bounds
-                                                      :constraints constraints
-                                                      :original-names (uniquify-onames
-                                                                        (map :original-name gs)
-                                                                        used-onames)))
-                                             (Poly? rng)
-                                             (let [
-                                                   ; avoid reusing these original names, otherwise they will appear to
-                                                   ; be captured by inner bindings in pretty printed types
-                                                   used-onames (set (keep (comp :original-name meta) (fv rng)))
-                                                   _ (prn "used-onames" used-onames)
-                                                   rng-gs (Poly-frees rng)
-                                                   rng-body (Poly-body rng rng-gs)
-                                                   _ (assert (IFn? rng-body))
-                                                   rng-cs (Poly-constraints rng rng-gs)
-                                                   rng-bounds (Poly-bounds rng rng-gs)
-                                                   names (into (mapv :name gs)
-                                                               (map :name rng-gs))]
-                                               (Poly* names
-                                                      rng-body
-                                                      :constraints (into order rng-cs)
-                                                      :bounds (let [v->b (merge (zipmap gs-names
-                                                                                        (repeat {:lower -nothing
-                                                                                                 :upper -any}))
-                                                                                (select-keys (:cs c) gs-names))]
-                                                                (into (mapv (comp #(select-keys % [:lower :upper])
-                                                                                  v->b)
-                                                                            gs-names)
-                                                                      rng-bounds))
-                                                      :original-names (uniquify-onames
-                                                                        (into (mapv :original-name gs)
-                                                                              (map :original-name rng-gs))
-                                                                        used-onames)))
-                                             (not (#{:Union :Intersection :Poly} (:op rng)))
-                                             (subst-with-constraint X c rng)
-                                             :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
-                                                       nil))]
-                                  (prn "synth-res" (unparse-type synth-res))
-                                  (when-let [smret (smallest-matching-super synth-res P)]
-                                    smret))))))))))]
-    (case (:op body)
-      :IFn (some solve-pmethod (:methods body))
-      nil))))
+                ;_ (prn "existing-c" (some-> existing-c unparse-cset))
+                ]
+            (case (:op body)
+              :IFn (some #(solve-pmethod V X % P cargs gs existing-c) (:methods body))
+              nil))))
 
 #_
 (t/ann check [P Env E :-> T])

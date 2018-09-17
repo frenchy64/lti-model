@@ -126,6 +126,8 @@
           (mapT inc)))
   (is (tc ?
           (mapT (fn [x] x))))
+  (is (tc (All [r] [[r Int :-> r] :-> [r Int :-> r]])
+          (mapT (fn [x] x))))
   (is (tc ?
           (intoT []
                  (mapT (fn [x] x))
