@@ -875,10 +875,14 @@
   (prn "gen-constraint")
   (prn "s" (unparse-type s))
   (prn "t" (unparse-type t))
-  (assert (not= -wild s) s)
-  (assert (not= -wild t) t)
+  ;(assert (not= -wild s) s)
+  ;(assert (not= -wild t) t)
   (cond
-    (= s t) (trivial-constraint X)
+    (or (= s t)
+        ;FIXME not sure if these are good ideas
+        (= s -wild)
+        (= t -wild))
+    (trivial-constraint X)
     ; CG-Top
     (= -any t) (trivial-constraint X)
     ; CG-Bot
@@ -956,6 +960,8 @@
     (let [delay-order (mapv
                         (fn [sym]
                           (set (filter #(or (contains? (:depends %) sym)
+                                            ; for delays where variables are on the left
+                                            ; eg. [a :-> b] <: [Int :-> Int]
                                             (and (empty? (:depends %))
                                                  (contains? (:provides %) sym)))
                                        delays)))
@@ -1104,6 +1110,8 @@
       :else (do (prn "TODO return too complex" (:op rng) (:op (:type rng)))
                 nil))))
 
+
+; V; X; P; c |- m; cargs => T
 (defn solve-pmethod [V X m P cargs gs existing-c]
   {:pre [(set? V)
          (set? X)

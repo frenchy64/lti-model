@@ -118,10 +118,10 @@
              (comp (fn [x] x)
                    (fn [x] x)))))
   ; unsure why this errors
-  ;FIXME
-  (is (tc-err [? :-> Int]
-              (comp (fn [x] x)
-                    (fn [x] x))))
+  (is (= '[Nothing :-> Int]
+         (tc [? :-> Int]
+             (comp (fn [x] x)
+                   (fn [x] x)))))
   ; Transducers
   (is (= '(All [[a :upper Int] [b :lower Int] r]
             [[r b :-> r] :-> [r a :-> r]])
@@ -145,9 +145,10 @@
          (tc (All [a b]
                [[b :-> a] [a :-> b] :-> [a :-> a]])
              comp)))
-  (is (tc (All [a1] [a1 :-> a1])
-          (comp (fn [x] x)
-                (fn [x] x))))
+  (is (= '(All [a1] [a1 :-> a1])
+         (tc (All [a1] [a1 :-> a1])
+             (comp (fn [x] x)
+                   (fn [x] x)))))
   ; like annotating (Transducer Int Int)
   (is (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
           (mapT inc)))
@@ -158,8 +159,13 @@
              (mapT inc))))
   (is (tc ?
           (mapT (fn [x] x))))
-  (is (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
-          (mapT (fn [x] x))))
+  (is (= '(All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
+         (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
+             (mapT (fn [x] x)))))
+  (is (= '(All [r1] [[r1 Any :-> r1] :-> [r1 Int :-> r1]])
+         (tc (All [r1] [[r1 ? :-> r1] :-> [r1 Int :-> r1]])
+             (mapT (fn [x] x)))))
+  #_
   (is (tc ?
           (intoT []
                  (mapT (fn [x] x))
@@ -170,6 +176,7 @@
 ;                  (fun g -> fun x -> f (g g) x) in
 ; let compute = Y (fun f -> fun x -> plus 1 (f x)) in
 ; compute 1
+#_
 (deftest ycomb
   (is (tc ?
           (let [Y (fn [f]
