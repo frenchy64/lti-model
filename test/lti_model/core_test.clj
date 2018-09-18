@@ -129,6 +129,60 @@
              (mapT inc))))
   )
 
+(deftest id-cast-test
+  (is (= '(All [a b c] [a :-> a])
+         (tc (All [a b c] [a :-> a])
+             id)))
+  (is (tc [Nothing :-> Any]
+          id))
+  (is (tc [Nothing :-> Nothing]
+          id))
+  (is (tc [Any :-> Any]
+          id))
+  (is (tc-err [Any :-> Nothing]
+              id))
+  (is (tc-err [Int :-> Nothing]
+              id))
+  (is (tc [Nothing :-> Int]
+          id))
+  (is (tc (All [a b] [(U a b) :-> (U a b)])
+          id))
+  (is (tc (All [a b] [(I a b) :-> (I a b)])
+          id))
+  (is (tc (All [a b] [(I a b) :-> (I b a)])
+          id))
+  (is (tc (All [a b] [(Seq (I a b)) :-> (Seq (I b a))])
+          id))
+  ; eg. [(I Int Bool) :-> Bool]
+  ; eg. [(I Int Bool) :-> Int]
+  (is (tc (All [a b] [(I a b) :-> a])
+          id))
+  (is (tc (All [a b c] [(I a b c) :-> (I a c)])
+          id))
+  ; eg. [Int :-> (I Bool Int)]
+  ; eg. [Bool :-> (I Bool Int)]
+  (is (tc-err (All [a b] [a :-> (I a b)])
+              id))
+  (is (tc-err (All [a b c] [(I a c) :-> (I a b)])
+              id))
+  (is (tc-err (All [a b c] [(Seq (I a c)) :-> (Seq (I a b))])
+              id))
+  (is (tc (All [a b] [(U a b) :-> (U a b)])
+          id))
+  (is (tc-err (All [a b c] [(U a b) :-> (U a c)])
+              id))
+  (is (tc ?
+          (let [f (ann id (All [a] [a :-> a]))]
+            (f 1))))
+  (is (tc-err ?
+              (let [f (ann id (All [a b] [a :-> b]))]
+                (f 1))))
+  ; out of scope?
+  (is (tc ?
+          (let [f (ann id (All [a b] [(I a b) :-> (I a b)]))]
+            (f 1))))
+  )
+
 (deftest fancy-polymorphic-upcast
   (is (= '(All [c a b]
             [[b :-> c] [a :-> b] :-> [a :-> c]])

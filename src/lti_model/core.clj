@@ -9,6 +9,7 @@
 ;     | n            ; integers
 ;     | (fn [x *] e) ; functions
 ;     | (let [x e *] e) ; let
+;     | (ann e t)    ; type ascription
 ;     | [e *]        ; sequences
 ; t ::=                    ; Types
 ;     | (IFn [t * :-> t]+) ;ordered intersection function types
@@ -1205,13 +1206,20 @@
     (seq? e) (let [[op & args] e
                    _ (assert (seq e))]
                (case op
+                 ann (let [[e' at] args
+                           _ (assert (= 2 (count args)))
+                           t (check (parse-type at) env e')
+                           m (smallest-matching-super t P)]
+                       (prn "ann")
+                       (check-match t P m e))
                  let (let [[b body] args
                            _ (assert (= 2 (count args)))
                            _ (assert (even? (count b)))
                            _ (assert (vector? b))
                            b (partition 2 b)]
-                       (list* (list 'fn (mapv first b) body)
-                              (map second b)))
+                       (check P env
+                              (list* (list 'fn (mapv first b) body)
+                                     (map second b))))
                  fn (let [[plist body] args
                           t (cond
                               (= -wild P) {:op :Closure
