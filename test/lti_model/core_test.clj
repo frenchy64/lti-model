@@ -151,6 +151,11 @@
   ; like annotating (Transducer Int Int)
   (is (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
           (mapT inc)))
+  (is (tc-err (All [r1 r2] [[r1 Int :-> r1] :-> [r2 Int :-> r2]])
+              (mapT inc)))
+  (is (= '(All [r1 r2] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
+         (tc (All [r1 r2] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
+             (mapT inc))))
   (is (tc ?
           (mapT (fn [x] x))))
   (is (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])

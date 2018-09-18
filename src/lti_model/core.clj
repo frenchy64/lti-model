@@ -742,27 +742,36 @@
          (or (empty? (set/intersection (fv s) X))
              (empty? (set/intersection (fv t) X)))]}
   (prn "delay-constraint" (unparse-type s) (unparse-type t))
-  (let [pattern (or (when (seq (set/intersection (fv s) X))
-                      s)
-                    (when (seq (set/intersection (fv t) X))
-                      t)
-                    t)
-        m (cond
-            (IFn? pattern) (do
-                             (assert (= 1 (count (:methods pattern))))
-                             (first (:methods pattern)))
-            (Poly? pattern) (let [gs (Poly-frees pattern)
-                                  body (Poly-body pattern gs)]
+  (let [m (cond
+            (IFn? t) (do
+                             (assert (= 1 (count (:methods t))))
+                             (first (:methods t)))
+            (Poly? t) (let [gs (Poly-frees t)
+                                  body (Poly-body t gs)]
                               (assert (= 1 (count (:methods body))))
                               (first (:methods body)))
-            :else (assert nil (str "What is this" (:op pattern))))
+            :else (assert nil (str "What is this" (:op t))))
         _ (assert (Fn? m))
-        domv (set/intersection X (into #{} (mapcat fv (:dom m))))
-        rngv (set/intersection X (fv (:rng m)))]
+        sfv (set/intersection (fv s) X)
+        {:keys [depends provides]} (if (empty? sfv)
+                                     ; FIXME this doesn't seem to "depend" on a
+                                     ; eg. [Int :-> Int] <: [a :-> b]
+                                     ; depends #{a}, provides #{b}
+                                     ; eg. Closure <: [a :-> b]
+                                     {:depends (set/intersection X (into #{} (mapcat fv (:dom m))))
+                                      :provides (set/intersection X (fv (:rng m)))}
+                                     ; eg. [a :-> b] <: [Int :-> Int]
+                                     ; provides #{a b}
+                                     ; helps for tranducers, eg.
+                                     ; (All [r1] [[r1 b :-> r1] :-> [r1 a :-> r1]])
+                                     ; <:
+                                     ; (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
+                                     {:depends #{}
+                                      :provides sfv})]
     {:xs X
      :cs {}
      :delay #{{:V V :X X :lower s :upper t
-               :depends domv :provides rngv}}}))
+               :depends depends :provides provides}}}))
 
 ; (Seqable C) -> C
 (defn intersect-constraints [cs]
@@ -887,6 +896,9 @@
     (or (= :F (:op s))
         (= :F (:op t)))
     (impossible-constraint X)
+    (and (= :Seq (:op s))
+         (= :Seq (:op t)))
+    (gen-constraint V X (:type s) (:type t))
     ; CG-Fun
     (IFn? t)
     (cond
@@ -938,12 +950,17 @@
   {:pre [(every? (comp set? :depends) delays)
          (every? (comp set? :provides) delays)]}
   (prn "order-delays" (unparse-delays delays))
+  (prn "graph" (delays->graph delays))
   (when-let [order (topo/kahn-sort (delays->graph delays))]
+    (prn "order" order)
     (let [delay-order (mapv
                         (fn [sym]
-                          (set (filter #(contains? (:depends %) sym) delays)))
+                          (set (filter #(or (contains? (:depends %) sym)
+                                            (and (empty? (:depends %))
+                                                 (contains? (:provides %) sym)))
+                                       delays)))
                         order)]
-      (vec (apply concat delay-order)))))
+      (into [] (distinct) (apply concat delay-order)))))
 
 (defn indent-str-by [ind s]
   (apply str
