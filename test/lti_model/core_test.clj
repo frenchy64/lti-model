@@ -78,10 +78,12 @@
   (is (= 'Int
          (tc Int (app (fn [x] x) 1))))
   (is (tc-err (Seq Int) (app (fn [x] x) 1)))
-  ; FIXME fishy
-  (is (tc ? (comp inc inc)))
+  (is (= '(All [[a :upper Int] [b :lower Int :upper Int] [c :lower Int]]
+            [a :-> c])
+         (tc ? (comp inc inc))))
   (is (= '[Int :-> Int]
-         (tc [Int :-> Int] (comp inc inc))))
+         (tc [Int :-> Int]
+             (comp inc inc))))
   ; (All [a b c :constraints [[Closure#1 <: [b :-> c]]
   ;                           [Closure#2 <: [a :-> b]]]]
   ;   [a :-> c])
@@ -110,26 +112,92 @@
                      (fn [x] x))
                1)))
   ; [Int :-> Int]
+  ;FIXME
   (is (= '[Nothing :-> Any]
          (tc [? :-> Any]
              (comp (fn [x] x)
                    (fn [x] x)))))
   ; unsure why this errors
+  ;FIXME
   (is (tc-err [? :-> Int]
               (comp (fn [x] x)
                     (fn [x] x))))
   ; Transducers
-  (is (tc ?
-          (mapT inc)))
+  (is (= '(All [[a :upper Int] [b :lower Int] r]
+            [[r b :-> r] :-> [r a :-> r]])
+         (tc ?
+             (mapT inc))))
+  )
+
+(deftest fancy-polymorphic-upcast
+  (is (= '(All [c a b]
+            [[b :-> c] [a :-> b] :-> [a :-> c]])
+         (tc (All [c a b]
+               [[b :-> c] [a :-> b] :-> [a :-> c]])
+             comp)))
+  (is (= '(All [a]
+               [[a :-> a] [a :-> a] :-> [a :-> a]])
+         (tc (All [a]
+               [[a :-> a] [a :-> a] :-> [a :-> a]])
+             comp)))
+  (is (= '(All [a b]
+               [[b :-> a] [a :-> b] :-> [a :-> a]])
+         (tc (All [a b]
+               [[b :-> a] [a :-> b] :-> [a :-> a]])
+             comp)))
+  (is (tc (All [a1] [a1 :-> a1])
+          (comp (fn [x] x)
+                (fn [x] x))))
   ; like annotating (Transducer Int Int)
-  (is (tc (All [r] [[r Int :-> r] :-> [r Int :-> r]])
+  (is (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
           (mapT inc)))
   (is (tc ?
           (mapT (fn [x] x))))
-  (is (tc (All [r] [[r Int :-> r] :-> [r Int :-> r]])
+  (is (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
           (mapT (fn [x] x))))
   (is (tc ?
           (intoT []
                  (mapT (fn [x] x))
                  [1 2 3])))
   )
+
+; let Y = fun f -> (fun g -> fun x -> f (g g) x)
+;                  (fun g -> fun x -> f (g g) x) in
+; let compute = Y (fun f -> fun x -> plus 1 (f x)) in
+; compute 1
+(deftest ycomb
+  (is (tc ?
+          (let [Y (fn [f]
+                    ((fn [g] (fn [x] (f (g g) x)))
+                     (fn [g] (fn [x] (f (g g) x)))))]
+            (let [compute (Y (fn [f x] (+ 1 (f x))))]
+              (compute 1)))))
+  )
+
+(deftest polymorphic-upcast
+  (is (= '(All [b a] [[a :-> b] a :-> b])
+         (tc (All [b a] [[a :-> b] a :-> b])
+             app)))
+  (is (= '(All [a] [[a :-> a] a :-> a])
+         (tc (All [a] [[a :-> a] a :-> a])
+             app)))
+  (is (tc-err (All [a1 b1] [[a1 :-> b1] b1 :-> a1])
+              app))
+  (is (tc-err (All [a1 b1] [[b1 :-> a1] b1 :-> b1])
+              app))
+  (is (= '(All [b] [[Int :-> b] Int :-> b])
+         (tc (All [b] [[Int :-> b] Int :-> b])
+             app)))
+  (is (= '(All [a] [[a :-> Int] a :-> Int])
+         (tc (All [a] [[a :-> Int] a :-> Int])
+             app)))
+  (is (tc-err (All [a] [[a :-> Int] Int :-> Int])
+              app))
+  (is (tc-err (All [a b] [[a :-> Int] a :-> b])
+              app))
+  (is (tc-err (All [a b] [[a :-> Int] a :-> b])
+              app))
+  (is (tc-err (All [a b] [a :-> b])
+              (comp (fn [x] x)
+                    (fn [x] x))))
+)

@@ -8,6 +8,7 @@
 ;     | c            ; constant functions
 ;     | n            ; integers
 ;     | (fn [x *] e) ; functions
+;     | (let [x e *] e) ; let
 ;     | [e *]        ; sequences
 ; t ::=                    ; Types
 ;     | (IFn [t * :-> t]+) ;ordered intersection function types
@@ -491,7 +492,9 @@
 
 (defn subtype? [s t]
   {:pre [(:op s)
-         (:op t)]
+         (:op t)
+         (not= -wild s)
+         (not= -wild t)]
    :post [(boolean? %)]}
   (cond
     (or (= s t) 
@@ -500,7 +503,7 @@
     true
     (= :Intersection (:op t)) (every? #(subtype? s %) (:types t))
     (= :Intersection (:op s)) (boolean (some #(subtype? % t) (:types s)))
-    (= :Union (:op t)) (some #(subtype? % t) (:types s))
+    (= :Union (:op t)) (boolean (some #(subtype? % t) (:types s)))
     (= :Union (:op s)) (every? #(subtype? % t) (:types s))
     (and (IFn? s)
          (IFn? t))
@@ -738,6 +741,7 @@
          (set? X)
          (or (empty? (set/intersection (fv s) X))
              (empty? (set/intersection (fv t) X)))]}
+  (prn "delay-constraint" (unparse-type s) (unparse-type t))
   (let [pattern (or (when (seq (set/intersection (fv s) X))
                       s)
                     (when (seq (set/intersection (fv t) X))
@@ -805,7 +809,7 @@
            -any
            -nothing)
          t)
-    :Int t
+    (:Int :Closure) t
     :Seq (update t :type #(promote-demote dir V %))
     :Poly (let [gs (Poly-frees t)
                 body (Poly-body t gs)
@@ -933,7 +937,7 @@
 (defn order-delays [delays]
   {:pre [(every? (comp set? :depends) delays)
          (every? (comp set? :provides) delays)]}
-  ;(prn "order-delays" delays)
+  (prn "order-delays" (unparse-delays delays))
   (when-let [order (topo/kahn-sort (delays->graph delays))]
     (let [delay-order (mapv
                         (fn [sym]
@@ -977,19 +981,18 @@
                        (empty? (set/intersection (fv upper) X)))]}
             (prn "process delay")
             (prn "X" (into #{} (map unparse-free-name) X))
-            (prn "lower" (unparse-type lower))
-            (prn "upper" (unparse-type upper))
+            (prn "lower" (unparse-type lower) (set/intersection (fv lower) X))
+            (prn "upper" (unparse-type upper) (set/intersection (fv upper) X))
             (or
-              (let [pattern upper
-                    m (cond
-                        (IFn? pattern) (do
-                                         (assert (= 1 (count (:methods pattern))))
-                                         (first (:methods pattern)))
-                        (Poly? pattern) (let [gs (Poly-frees pattern)
-                                              body (Poly-body pattern gs)]
-                                          (assert (= 1 (count (:methods body))))
-                                          (first (:methods body)))
-                        :else (assert nil (str "What is this" (:op pattern))))
+              (let [m (cond
+                        (IFn? upper) (do
+                                       (assert (= 1 (count (:methods upper))))
+                                       (first (:methods upper)))
+                        (Poly? upper) (let [gs (Poly-frees upper)
+                                            body (Poly-body upper gs)]
+                                        (assert (= 1 (count (:methods body))))
+                                        (first (:methods body)))
+                        :else (assert nil (str "What is this" (:op upper))))
                     ddom (mapv #(subst-with-constraint X c %)
                                (:dom m))
                     _ (prn "dom" (mapv unparse-type (:dom m)))
@@ -1000,7 +1003,7 @@
                     ]
                 (prn "rng" (unparse-type rng))
                 (prn "wrng" (unparse-type wrng))
-                (when-let [sol (solve-app wrng lower ddom)]
+                (when-let [sol (solve-app wrng (demote X lower) ddom)]
                   (let [_ (prn "sol" (unparse-type sol))
                         c' (gen-constraint V X sol rng)]
                     (if (or (nil? c')
@@ -1096,19 +1099,20 @@
   (when (= (count (:dom m))
            (count cargs))
     (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
-          ;_ (prn "cdom" (map unparse-cset cdom))
+          _ (prn "cdom" (map unparse-cset cdom))
           rng (:rng m)]
       (when-let [exp (largest-matching-sub -any P)]
-        ;(prn "rng" (unparse-type rng))
-        ;(prn "expected return" (unparse-type exp))
+        (prn "rng" (unparse-type rng))
+        (prn "expected return" (unparse-type exp))
         (let [crng (gen-constraint V X rng exp)]
-          ;(prn "crng" (some-> crng unparse-cset))
+          ;(prn "crng" (unparse-cset crng))
+          ;(prn "existing-c" (unparse-cset existing-c))
           (when-let [c (intersect-constraints
                          (concat [crng existing-c] cdom))]
-            ;(prn "intersected" (unparse-cset c))
+            (prn "intersected" (unparse-cset c))
             ; true if X's in delays are acyclic
             (when-let [order (order-delays (:delay c))]
-              ;(prn "order" order)
+              (prn "order" order)
               (when-let [c (process-delays c order)]
                 (when-let [synth-res (synthesize-result X c order rng gs)]
                   (prn "synth-res" (unparse-type synth-res))
@@ -1151,7 +1155,7 @@
                                (map (fn [{:keys [lower upper]}]
                                       (gen-constraint V X lower upper))
                                     (Poly-bounds cop gs))))
-                ;_ (prn "existing-c" (some-> existing-c unparse-cset))
+                ;_ (prn "existing-c" (unparse-cset existing-c))
                 ]
             (case (:op body)
               :IFn (some #(solve-pmethod V X % P cargs gs existing-c) (:methods body))
@@ -1176,6 +1180,13 @@
     (seq? e) (let [[op & args] e
                    _ (assert (seq e))]
                (case op
+                 let (let [[b body] args
+                           _ (assert (= 2 (count args)))
+                           _ (assert (even? (count b)))
+                           _ (assert (vector? b))
+                           b (partition 2 b)]
+                       (list* (list 'fn (mapv first b) body)
+                              (map second b)))
                  fn (let [[plist body] args
                           t (cond
                               (= -wild P) {:op :Closure
