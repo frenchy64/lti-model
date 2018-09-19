@@ -178,6 +178,7 @@
               (let [f (ann id (All [a b] [a :-> b]))]
                 (f 1))))
   ; out of scope?
+  #_
   (is (tc ?
           (let [f (ann id (All [a b] [(I a b) :-> (I a b)]))]
             (f 1))))
@@ -266,4 +267,41 @@
   (is (tc-err (All [a b] [a :-> b])
               (comp (fn [x] x)
                     (fn [x] x))))
+)
+
+(deftest overload-first-order
+  (is (= 'Int
+         (tc ? (+' 1 2))))
+  (is (= 'Num
+         (tc Num (+ 1 2))))
+  (is (tc-err ? (+ (ann 1 Num)
+                   (ann 2 Num))))
+  (is (= 'Num
+         (tc ? (+' (ann 1 Num)
+                   (ann 2 Num)))))
+  (is (= 'Num
+         (tc ? (+' (ann 1 Num)
+                   2))))
+  (is (= 'Num
+         (tc ? (+' 1
+                   (ann 2 Num)))))
+  (is (= 'Num
+         (tc Num (+' 1
+                     2))))
+)
+
+(deftest overload-higher-order
+  (is (= 'Int
+         (tc ? (app (fn [x] (+' 1 x)) 2))))
+  (is (= 'Num
+         (tc ? (app (fn [x] (+' 1 x)) (ann 2 Num)))))
+  (is (= 'Int
+         (tc ? (app inc' 1))))
+  (is (= 'Num
+         (tc ? (app inc' (ann 1 Num)))))
+  ;FIXME
+  (is (= 'Int
+         (tc ? (app2 +' 1 2))))
+  (is (= 'Num
+         (tc ? (app2 +' 1 (ann 2 Num)))))
 )

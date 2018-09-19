@@ -16,6 +16,7 @@
 ;     | [t * :-> t]        ;function type
 ;     | a                  ;type variables
 ;     | Int                ;integers
+;     | Num                ;numbers
 ;     | (U t *)            ;unions
 ;     | (I t *)            ;intersections
 ;     | (Seq t)            ;sequences
@@ -47,7 +48,8 @@
          :methods (t/Vec '{:op :Fn
                            :dom (t/Vec T)
                            :rng T})}
-       '{:op ':Int}
+       ; base types
+       '{:op ':Base :name Sym}
        '{:op ':Seq
          :type T}
        '{:op ':Poly
@@ -78,7 +80,7 @@
          :syms (t/Vec t/Sym)
          :constraints (t/Vec '{:lower Scope :upper Scope})
          :type P}
-       '{:op ':Int}
+       '{:op ':Base :name Sym}
        '{:op ':Union
          :types (t/Vec P)}
        '{:op ':Intersection
@@ -94,10 +96,12 @@
 (declare make-U make-I)
 
 (def -wild {:op :Wild})
-(def -Int {:op :Int})
+(def -Int {:op :Base :name 'Int})
+(def -Num {:op :Base :name 'Num})
 (def -any {:op :Intersection :types #{}})
 (def -nothing {:op :Union :types #{}})
 (defn IFn? [t] (= :IFn (:op t)))
+(defn Base? [t] (= :Base (:op t)))
 (defn Poly? [t] (= :Poly (:op t)))
 (defn Fn? [t] (= :Fn (:op t)))
 
@@ -109,7 +113,7 @@
             (let [nt #(name-to outer %)
                   ntv #(mapv nt %)]
               (case (:op t)
-                (:Wild :Closure :B :Int) t
+                (:Wild :Closure :B :Base) t
                 :Union (make-U (map nt (:types t)))
                 :Intersection (make-I (map nt (:types t)))
                 :Seq (update t :type nt)
@@ -154,7 +158,7 @@
             (let [rp #(replace outer %)
                   rpv #(mapv rp %)]
               (case (:op t)
-                (:Wild :Closure :F :Int) t
+                (:Wild :Closure :F :Base) t
                 :Union (make-U (map rp (:types t)))
                 :Intersection (make-I (map rp (:types t)))
                 :Seq (update t :type rp)
@@ -305,7 +309,8 @@
                        (assert (seq methods))
                        {:op :IFn
                         :methods methods}))
-      ('#{Int} t) {:op :Int}
+      ('#{Int} t) -Int
+      ('#{Num} t) -Num
       ('#{Any} t) -any
       ('#{Nothing} t) -nothing
       ('#{?} t) {:op :Wild}
@@ -366,7 +371,7 @@
                     (list* 'I (mapv unparse-type (:types t))))
     :Closure (list 'Closure (unparse-env (:env t)) (:expr t))
     :Seq (list 'Seq (unparse-type (:type t)))
-    :Int 'Int
+    :Base (:name t)
     :Fn (let [dom (mapv unparse-type (:dom t))
               rng (unparse-type (:rng t))]
           (vec (concat dom [:-> rng])))
@@ -421,7 +426,7 @@
                           :invariant :invariant}
                          v))]
     (case (:op t)
-      (:Wild :Closure :B :Int) {}
+      (:Wild :Closure :B :Base) {}
       ; FIXME :constraints variances?
       :Poly (merge-fv-variances (fv-variances (:type t))
                                 (Poly-bounds-fv-variances (:bounds t))
@@ -448,9 +453,14 @@
 (def constant-type
   {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))
    'app0 (parse-type '(All [a b] [[a :-> b] :-> [a :-> b]]))
+   'app2 (parse-type '(All [a b c] [[a b :-> b] a b :-> c]))
    'id (parse-type '(All [a] [a :-> a]))
    '+ (parse-type '[Int Int :-> Int])
+   '+' (parse-type '(IFn [Int Int :-> Int]
+                         [Num Num :-> Num]))
    'inc (parse-type '[Int :-> Int])
+   'inc' (parse-type '(IFn [Int :-> Int]
+                           [Num :-> Num]))
    'comp (parse-type '(All [a b c] [[b :-> c] [a :-> b] :-> [a :-> c]]))
    'every-pred (parse-type '(All [a] [[a :-> Any] [a :-> Any] :-> [a :-> Any]]))
    'partial (parse-type '(All [a b c] [[a b :-> c] a :-> [b :-> c]]))
@@ -491,6 +501,13 @@
         sbt (substitution-for-variances gs-variances bounds)]
     ))
 
+(defn base-supers [t]
+  {:pre [(Base? t)]
+   :post [((some-fn nil? (every-pred set? seq)) %)
+          (not (contains? % t))]}
+  ({'Int #{-Num}}
+   (:name t)))
+
 (defn subtype? [s t]
   {:pre [(:op s)
          (:op t)
@@ -515,6 +532,10 @@
     (and (= :Seq (:op s))
          (= :Seq (:op t)))
     (subtype? (:type s) (:type t))
+    (= :Base (:op s))
+    (boolean
+      (when-let [s (base-supers s)]
+        (subtype? (make-U s) t)))
     :else false))
 
 (declare match-dir)
@@ -593,6 +614,10 @@
     (let [matches (mapv #(match-dir dir % P) (:types t))]
       (when (every? :op matches)
         (make-U (set matches))))
+
+    (Base? t)
+    (when-let [s (base-supers t)]
+      (match-dir dir (make-U s) P))
 
     (and (IFn? t)
          (IFn? P))
@@ -819,7 +844,7 @@
            -any
            -nothing)
          t)
-    (:Int :Closure) t
+    (:Base :Closure) t
     :Seq (update t :type #(promote-demote dir V %))
     :Poly (let [gs (Poly-frees t)
                 body (Poly-body t gs)
@@ -1264,7 +1289,7 @@
                                             "Expected:\n\t" (unparse-type P)
                                             "\n\nin:\n\t" e)
                                        {::type-error true}))))))
-    (integer? e) (let [t {:op :Int}
+    (integer? e) (let [t -Int
                        m (smallest-matching-super t P)]
                    (check-match t P m e))
     :else (assert nil (str "Bad expression in check: " e))))
