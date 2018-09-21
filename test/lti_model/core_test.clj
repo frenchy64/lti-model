@@ -94,6 +94,10 @@
          (tc [Int :-> Int]
              (comp (fn [x] x)
                    (fn [x] x)))))
+  (is (= '(All [a b c :constraints [(Closure {} (fn [x] (x x))) :< [a :-> b]] [(Closure {} (fn [x] x)) :< [b :-> c]]] [a :-> c])
+         (tc ? ;[Int :-> Int]
+             (comp (fn [x] x)
+                   (fn [x] (x x))))))
   (is (tc-err [Int :-> (Seq Int)]
               (comp (fn [x] x)
                     (fn [x] x))))
@@ -117,7 +121,7 @@
          (tc [? :-> Any]
              (comp (fn [x] x)
                    (fn [x] x)))))
-  ; unsure why this errors
+  ; FIXME
   (is (= '[Nothing :-> Int]
          (tc [? :-> Int]
              (comp (fn [x] x)
@@ -173,7 +177,47 @@
               id))
   (is (tc ?
           (let [f (ann id (All [a] [a :-> a]))]
-            (f 1))))
+            (f 1)
+            )))
+  (is (= 'Int
+         (tc ?
+             (let [f (fn [x] x)]
+               (f 1)))))
+  (is (= 'Int
+         (tc ?
+             (let [f (fn [x] x)]
+               ((f f) 1)))))
+  (is (= 'Int
+         (tc ?
+             (let [f (fn [x] x)]
+               ((f f) 1)))))
+  ; not exponential like let-polymorphism: https://cs.stackexchange.com/questions/6617/concise-example-of-exponential-cost-of-ml-type-inference
+; # let f1 x = pair x in
+;   let f2 x = f1 (f1 x) in
+;   let f3 x = f2 (f2 x) in
+;   fun z -> f3 (fun x -> x) z;;
+  (is
+    (= 'Int
+       (tc Int
+           ((let [pair (fn [f]
+                         (fn [x]
+                           ((f x) x)))]
+              (let [f1 (fn [x] (pair x))]
+                (let [f2 (fn [x] (f1 (f1 x)))]
+                  (let [f3 (fn [x] (f2 (f2 x)))]
+                    (let [f4 (fn [x] (f3 (f3 x)))]
+                      (fn [z]
+                        ((f4 (fn [x] x)) z)))))))
+            (fn [x]
+              (fn [y]
+                (fn [x']
+                  (fn [y']
+                    (fn [x]
+                      (fn [y]
+                        (fn [x']
+                          (fn [y']
+                            1))))))))))))
+
   (is (tc-err ?
               (let [f (ann id (All [a b] [a :-> b]))]
                 (f 1))))
@@ -214,6 +258,9 @@
              (mapT inc))))
   (is (tc ?
           (mapT (fn [x] x))))
+  (is (tc ?
+          (comp (mapT (fn [x] x))
+                (mapT (fn [x] x)))))
   (is (= '(All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
          (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
              (mapT (fn [x] x)))))
@@ -239,6 +286,14 @@
                      (fn [g] (fn [x] (f (g g) x)))))]
             (let [compute (Y (fn [f x] (+ 1 (f x))))]
               (compute 1)))))
+  (is (tc ?
+          (let [Y (fn [f]
+                    ((fn [g] (fn [x] (f (g g) x)))
+                     (fn [g] (fn [x] (f (g g) x)))))]
+            (let [compute (Y (fn [f x] (+ 1 (f x))))]
+              (compute 1)))))
+  ; (All [a c] [[a c -> a] a (Seqable c) -> a])
+  ;TODO cycles in `reduce`
   )
 
 (deftest polymorphic-upcast

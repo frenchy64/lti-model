@@ -1176,7 +1176,9 @@
   (prn "P" (unparse-type P))
   (prn "cargs" (mapv unparse-type cargs))
   (case (:op cop)
-    ;; TODO unions of functions
+    :Union (make-U (map #(solve-app P % cargs) (:types cop)))
+    :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
+                          {::type-error true}))
     :Closure (let [ifn (check {:op :IFn
                                :methods [{:op :Fn
                                           :dom cargs
