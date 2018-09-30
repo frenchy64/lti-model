@@ -357,7 +357,7 @@
                                     [n :lower (unparse-type (:lower b)) :upper (unparse-type (:upper b))])))
                               gs (Poly-bounds t gs))
                         (when (seq constraints)
-                          (into [:constraints] constraints)))
+                          [:constraints (set constraints)]))
                   body))
     :F (or (when (not *verbose-types*)
              (:original-name t))
@@ -452,6 +452,7 @@
 
 (def constant-type
   {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))
+   'appid (parse-type '(All [a] [[a :-> a] a :-> a]))
    'app0 (parse-type '(All [a b] [[a :-> b] :-> [a :-> b]]))
    'app2 (parse-type '(All [a b c] [[a b :-> b] a b :-> c]))
    'id (parse-type '(All [a] [a :-> a]))
@@ -464,7 +465,7 @@
    'comp (parse-type '(All [a b c] [[b :-> c] [a :-> b] :-> [a :-> c]]))
    'every-pred (parse-type '(All [a] [[a :-> Any] [a :-> Any] :-> [a :-> Any]]))
    'partial (parse-type '(All [a b c] [[a b :-> c] a :-> [b :-> c]]))
-   'reduce (parse-type '(All [a b c] [[a c :-> a] a (Seq c) :-> a]))
+   'reduce (parse-type '(All [a c] [[a c :-> a] a (Seq c) :-> a]))
    'mapT (parse-type '(All [a b] [[a :-> b] :-> (All [r] [[r b :-> r] :-> [r a :-> r]])]))
    'intoT (parse-type '(All [a b] [(Seq b) (All [r] [[r b :-> r] :-> [r a :-> r]]) (Seq a) :-> (Seq b)]))
    })
@@ -726,7 +727,8 @@
 (defn unparse-cset [cs]
   (when cs
     (let [onames-seq (map unparse-free-name (:xs cs))
-          use-onames? (apply distinct? onames-seq)
+          use-onames? (or (empty? onames-seq)
+                          (apply distinct? onames-seq))
           onames (if use-onames?
                    (set onames-seq)
                    (:xs cs))]
@@ -982,7 +984,7 @@
   (prn "order-delays" (unparse-delays delays))
   (prn "graph" (delays->graph delays))
   (when-let [order (topo/kahn-sort (delays->graph delays))]
-    (prn "order" order)
+    (prn "sorted order" order)
     (let [delay-order (mapv
                         (fn [sym]
                           (set (filter #(or (contains? (:depends %) sym)
@@ -1024,51 +1026,72 @@
                         sym))))))
           names)))
 
-(defn process-delays [c order]
-  (reduce (fn [c {:keys [V X lower upper] :as dly}]
-            {:pre [(or (empty? (set/intersection (fv lower) X))
-                       (empty? (set/intersection (fv upper) X)))]}
-            (prn "process delay")
-            (prn "X" (into #{} (map unparse-free-name) X))
-            (prn "lower" (unparse-type lower) (set/intersection (fv lower) X))
-            (prn "upper" (unparse-type upper) (set/intersection (fv upper) X))
-            (or
-              (let [m (cond
-                        (IFn? upper) (do
-                                       (assert (= 1 (count (:methods upper))))
-                                       (first (:methods upper)))
-                        (Poly? upper) (let [gs (Poly-frees upper)
-                                            body (Poly-body upper gs)]
-                                        (assert (= 1 (count (:methods body))))
-                                        (first (:methods body)))
-                        :else (assert nil (str "What is this" (:op upper))))
-                    ddom (mapv #(subst-with-constraint X c %)
-                               (:dom m))
-                    _ (prn "dom" (mapv unparse-type (:dom m)))
-                    _ (prn "ddom" (mapv unparse-type ddom))
-                    rng (:rng m)
-                    wrng (subst (zipmap X (repeat -wild))
-                                rng)
-                    ]
-                (prn "rng" (unparse-type rng))
-                (prn "wrng" (unparse-type wrng))
-                (when-let [sol (solve-app wrng (demote X lower) ddom)]
-                  (let [_ (prn "sol" (unparse-type sol))
-                        c' (gen-constraint V X sol rng)]
-                    (if (or (nil? c')
-                            (seq (:delay c')))
-                      (do
-                        (prn "TODO inner cset delay")
-                        nil)
-                      (do
-                        (prn "c'" (unparse-cset c'))
-                        (intersect-constraints
-                          [c c']))))))
-              (reduced nil)))
-          c
-          order))
+(defn process-delays [c]
+  {:pre [c]}
+  (let [process-delay (fn [c {:keys [V X lower upper] :as dly}]
+                        {:pre [c
+                               (or (empty? (set/intersection (fv lower) X))
+                                   (empty? (set/intersection (fv upper) X)))]}
+                        (prn "process delay")
+                        (prn "X" (into #{} (map unparse-free-name) X))
+                        (prn "lower" (unparse-type lower) (set/intersection (fv lower) X))
+                        (prn "upper" (unparse-type upper) (set/intersection (fv upper) X))
+                        (let [m (cond
+                                  (IFn? upper) (do
+                                                 (assert (= 1 (count (:methods upper))))
+                                                 (first (:methods upper)))
+                                  (Poly? upper) (let [gs (Poly-frees upper)
+                                                      body (Poly-body upper gs)]
+                                                  (assert (= 1 (count (:methods body))))
+                                                  (first (:methods body)))
+                                  :else (assert nil (str "What is this" (:op upper))))
+                              ddom (mapv #(subst-with-constraint X c %)
+                                         (:dom m))
+                              _ (prn "dom" (mapv unparse-type (:dom m)))
+                              _ (prn "ddom" (mapv unparse-type ddom))
+                              rng (:rng m)
+                              wrng (subst (zipmap X (repeat -wild))
+                                          rng)
+                              ]
+                          (prn "rng" (unparse-type rng))
+                          (prn "wrng" (unparse-type wrng))
+                          (when-let [sol (solve-app wrng (demote X lower) ddom)]
+                            (let [_ (prn "sol" (unparse-type sol))
+                                  c' (gen-constraint V X sol rng)]
+                              (if (or (nil? c')
+                                      (seq (:delay c')))
+                                (do
+                                  (prn "TODO inner cset delay")
+                                  nil)
+                                (do
+                                  (prn "c'" (unparse-cset c'))
+                                  (intersect-constraints
+                                    [c c'])))))))
+        order (order-delays (:delay c))]
+    (cond
+      ; true if X's in delays are acyclic
+      order (let [c' (reduce (fn [c dly]
+                               (or (process-delay c dly)
+                                   (reduced nil)))
+                             c
+                             order)]
+              (update c' :delay #(into (or % #{}) (:delay c))))
+      ;FIXME very rough, find fixpoint
+      :else (loop [c c
+                   delays (:delay c)]
+              (prn "cycle detected")
+              (let [c' (reduce (fn [c dly]
+                                 (or (process-delay c dly)
+                                     (reduced nil)))
+                               c
+                               order)
+                    c' (update c' :delay #(into (or % #{}) (:delay c)))]
+                (if (= c c')
+                  c
+                  (recur c' delays)))))))
 
-(defn synthesize-result [X c order rng gs]
+(defn synthesize-result [X {constraints :delay :as c} rng gs]
+  {:pre [c]}
   (let [gs-names (map :name gs)]
     (cond
       (IFn? rng)
@@ -1078,7 +1101,6 @@
                      (mapv (comp #(select-keys % [:lower :upper])
                                  v->b)
                            gs-names))
-            constraints order
             ; avoid reusing these original names, otherwise they will appear to
             ; be captured by inner bindings in pretty printed types
             used-onames (set (keep (comp :original-name meta)
@@ -1118,7 +1140,7 @@
             ]
         (Poly* names
                rng-body
-               :constraints (into order rng-cs)
+               :constraints (into constraints rng-cs)
                :bounds (let [v->b (merge (zipmap gs-names
                                                  (repeat {:lower -nothing
                                                           :upper -any}))
@@ -1161,14 +1183,12 @@
           (when-let [c (intersect-constraints
                          (concat [crng existing-c] cdom))]
             (prn "intersected" (unparse-cset c))
-            ; true if X's in delays are acyclic
-            (when-let [order (order-delays (:delay c))]
-              (prn "order" order)
-              (when-let [c (process-delays c order)]
-                (when-let [synth-res (synthesize-result X c order rng gs)]
-                  (prn "synth-res" (unparse-type synth-res))
-                  (when-let [smret (smallest-matching-super synth-res P)]
-                    smret))))))))))
+            (when-let [c (process-delays c)]
+              (prn "c delays" (unparse-delays (:delay c)))
+              (when-let [synth-res (synthesize-result X c rng gs)]
+                (prn "synth-res" (unparse-type synth-res))
+                (when-let [smret (smallest-matching-super synth-res P)]
+                  smret)))))))))
 
 (defn solve-app [P cop cargs]
   (prn "solve-app" (:op cop))
@@ -1287,7 +1307,7 @@
                        (throw (ex-info (str "Could not apply function: "
                                             "\nFunction:\n\t"
                                             (indent-str-by "\t" (with-out-str (pprint (unparse-type cop))))
-                                            "\nArguments:\n\t" (apply println-str (mapv unparse-type cargs))
+                                            "\nArguments:\n" (apply str (map #(println-str (str "\t" %)) (map unparse-type cargs)))
                                             "Expected:\n\t" (unparse-type P)
                                             "\n\nin:\n\t" e)
                                        {::type-error true}))))))

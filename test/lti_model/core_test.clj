@@ -1,5 +1,6 @@
 (ns lti-model.core-test
   (:require [clojure.test :refer :all]
+            [clojure.pprint :refer [pprint]]
             [lti-model.core :refer :all :as lti]))
 
 (defmacro tc [P e]
@@ -84,17 +85,27 @@
   (is (= '[Int :-> Int]
          (tc [Int :-> Int]
              (comp inc inc))))
+  (is (= '(All [a b :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]}]
+            [a :-> b])
+         (tc ? (app0 (fn [x] x)))))
   ; (All [a b c :constraints [[Closure#1 <: [b :-> c]]
   ;                           [Closure#2 <: [a :-> b]]]]
   ;   [a :-> c])
-  (is (tc ?
-          (comp (fn [x] x)
-                (fn [x] x))))
+  ;FIXME
+  (is (= '(All [a b c :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]
+                                     [(Closure {} (fn [x] x)) :< [b :-> c]]}]
+            [a :-> c])
+         (tc ?
+             (comp (fn [x] x)
+                   (fn [x] x)))))
   (is (= '[Int :-> Int]
          (tc [Int :-> Int]
              (comp (fn [x] x)
                    (fn [x] x)))))
-  (is (= '(All [a b c :constraints [(Closure {} (fn [x] (x x))) :< [a :-> b]] [(Closure {} (fn [x] x)) :< [b :-> c]]] [a :-> c])
+  ;FIXME
+  (is (= '(All [a b c :constraints #{[(Closure {} (fn [x] (x x))) :< [a :-> b]]
+                                     [(Closure {} (fn [x] x)) :< [b :-> c]]}]
+            [a :-> c])
          (tc ? ;[Int :-> Int]
              (comp (fn [x] x)
                    (fn [x] (x x))))))
@@ -131,6 +142,11 @@
             [[r b :-> r] :-> [r a :-> r]])
          (tc ?
              (mapT inc))))
+  ;FIXME doesn't seem right
+  (is (= '(All [a [b :lower Int] r]
+            [[r b :-> r] :-> [r a :-> r]])
+         (tc ?
+             (mapT inc'))))
   )
 
 (deftest id-cast-test
@@ -258,9 +274,11 @@
              (mapT inc))))
   (is (tc ?
           (mapT (fn [x] x))))
+  ;; FIXME `r` occurs both sides
   (is (tc ?
-          (comp (mapT (fn [x] x))
-                (mapT (fn [x] x)))))
+          (comp
+            (mapT inc)
+            (mapT inc))))
   (is (= '(All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
          (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
              (mapT (fn [x] x)))))
@@ -273,6 +291,32 @@
                  (mapT (fn [x] x))
                  [1 2 3])))
   )
+
+(deftest reduce-test
+  (is (= '[[Int :-> Int] Int :-> Int]
+         (tc [[Int :-> Int] Int :-> Int]
+             appid)))
+  ;TODO
+  (is (= 'Int
+         (tc ?
+             (appid id 0))))
+  (is (= 'Int
+         (tc ?
+             (reduce (ann (fn [x y] x)
+                          [Int Int :-> Int])
+                     0
+                     [1 2 3]))))
+  (is (= 'Int
+         (tc ?
+             (reduce (ann (fn [x y] x)
+                          (IFn [Int Int :-> Int]
+                               [Num Num :-> Num]))
+                     0
+                     [1 2 3]))))
+  (is (tc ?
+          (reduce (fn [x y] x)
+                  0
+                  [1 2 3]))))
 
 ; let Y = fun f -> (fun g -> fun x -> f (g g) x)
 ;                  (fun g -> fun x -> f (g g) x) in
@@ -354,6 +398,13 @@
          (tc ? (app inc' 1))))
   (is (= 'Num
          (tc ? (app inc' (ann 1 Num)))))
+  ;FIXME
+  (is (= '(All [a b :constraints #{[(IFn [Int :-> Int]
+                                         [Num :-> Num])
+                                    :<
+                                    [a :-> b]]}]
+           [a :-> b])
+         (tc ? (app0 inc'))))
   ;FIXME
   (is (= 'Int
          (tc ? (app2 +' 1 2))))
