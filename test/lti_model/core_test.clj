@@ -4,7 +4,7 @@
             [lti-model.core :refer :all :as lti]))
 
 (defmacro tc [P e]
-  `(unparse-type (check (parse-type '~P) {} '~e)))
+  `(unparse-type (check-form (parse-type '~P) {} '~e)))
 
 (defmacro handle-type-error [f & body]
   `(try (do ~@body)
@@ -142,8 +142,8 @@
             [[r b :-> r] :-> [r a :-> r]])
          (tc ?
              (mapT inc))))
-  ;FIXME doesn't seem right
-  (is (= '(All [a [b :lower Int] r]
+  (is (= '(All [a [b :lower Int] r
+                :constraints #{[(IFn [Int :-> Int] [Num :-> Num]) :< [a :-> b]]}]
             [[r b :-> r] :-> [r a :-> r]])
          (tc ?
              (mapT inc'))))
@@ -272,24 +272,58 @@
   (is (= '(All [r1 r2] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
          (tc (All [r1 r2] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
              (mapT inc))))
-  (is (tc ?
-          (mapT (fn [x] x))))
+  (is (= '(All [a b r :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]}]
+            [[r b :-> r] :-> [r a :-> r]])
+         (tc ?
+             (mapT (fn [x] x)))))
   ;; FIXME `r` occurs both sides
+  ;; FIXME accidental shadowing of type variables?
+  (is (= false
+         '(All [a 
+                [b :lower (All [a b r]
+                            [r a :-> r])]
+                [c :lower (All [a b r
+                                :constraints #{[(All [a b r] [r a :-> r]) :< [r b :-> r]]}]
+                            [r a :-> r])]
+                :constraints #{[(All [[a :upper Int] [b :lower Int] r] [[r b :-> r] :-> [r a :-> r]]) :< [b :-> c]]
+                               [(All [[a :upper Int] [b :lower Int] r] [[r b :-> r] :-> [r a :-> r]]) :< [a :-> b]]}]
+             [a :-> c])
+         (tc ?
+             (comp
+               (mapT inc)
+               (mapT inc)))))
+  ;TODO
+  #_
   (is (tc ?
           (comp
-            (mapT inc)
-            (mapT inc))))
+            (mapT inc')
+            (mapT inc'))))
   (is (= '(All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
          (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
+             (mapT (fn [x] x)))))
+  (is (tc (All [r1] [[r1 Num :-> r1] :-> [r1 Int :-> r1]])
+          (mapT inc)))
+  (is (tc-err (All [r1] [[r1 (Seq Int) :-> r1] :-> [r1 Int :-> r1]])
+              (mapT inc)))
+  (is (= '(All [r1] [[r1 Num :-> r1] :-> [r1 Int :-> r1]])
+         (tc (All [r1] [[r1 Num :-> r1] :-> [r1 Int :-> r1]])
              (mapT (fn [x] x)))))
   (is (= '(All [r1] [[r1 Any :-> r1] :-> [r1 Int :-> r1]])
          (tc (All [r1] [[r1 ? :-> r1] :-> [r1 Int :-> r1]])
              (mapT (fn [x] x)))))
+  ;FIXME
+  (is (= '(Seq Int)
+         (tc ?
+             (intoT []
+                    (mapT inc)
+                    [1 2 3]))))
+  ;FIXME
   #_
-  (is (tc ?
-          (intoT []
-                 (mapT (fn [x] x))
-                 [1 2 3])))
+  (is (= '(Seq Int)
+         (tc ?
+             (intoT []
+                    (mapT (fn [x] x))
+                    [1 2 3]))))
   )
 
 (deftest reduce-test
@@ -313,31 +347,52 @@
                                [Num Num :-> Num]))
                      0
                      [1 2 3]))))
-  (is (tc ?
-          (reduce (fn [x y] x)
-                  0
-                  [1 2 3]))))
+  (is (= 'Num
+         (tc ?
+             (reduce (ann (fn [x y] x)
+                          (IFn [Int Int :-> Int]
+                               [Num Num :-> Num]))
+                     0
+                     [(ann 1 Num) 2 3]))))
+  (is (= 'Num
+         (tc ?
+             (reduce (fn [x y] (ann x Num))
+                     0
+                     [1 2 3]))))
+  (is (= 'Int
+         (tc ?
+             (reduce (fn [x y] (ann x Int))
+                     0
+                     [1 2 3]))))
+  (is (= 'Int
+         (tc ?
+             (reduce (fn [x y] x)
+                     0
+                     [1 2 3]))))
+  (is (tc-err (Seq Int)
+              (reduce (fn [x y] x)
+                      0
+                      [1 2 3]))))
 
 ; let Y = fun f -> (fun g -> fun x -> f (g g) x)
 ;                  (fun g -> fun x -> f (g g) x) in
 ; let compute = Y (fun f -> fun x -> plus 1 (f x)) in
 ; compute 1
-#_
 (deftest ycomb
-  (is (tc ?
-          (let [Y (fn [f]
-                    ((fn [g] (fn [x] (f (g g) x)))
-                     (fn [g] (fn [x] (f (g g) x)))))]
-            (let [compute (Y (fn [f x] (+ 1 (f x))))]
-              (compute 1)))))
-  (is (tc ?
-          (let [Y (fn [f]
-                    ((fn [g] (fn [x] (f (g g) x)))
-                     (fn [g] (fn [x] (f (g g) x)))))]
-            (let [compute (Y (fn [f x] (+ 1 (f x))))]
-              (compute 1)))))
-  ; (All [a c] [[a c -> a] a (Seqable c) -> a])
-  ;TODO cycles in `reduce`
+  ; hits checking limit
+  (is (tc-err ?
+              (let [Y (fn [f]
+                        ((fn [g] (fn [x] (f (g g) x)))
+                         (fn [g] (fn [x] (f (g g) x)))))]
+                (let [compute (Y (fn [f x] (+ 1 (f x))))]
+                  (compute 1)))))
+  ; hits checking limit
+  (is (tc-err ?
+              (let [Y (fn [f]
+                        ((fn [g] (fn [x] (f (g g) x)))
+                         (fn [g] (fn [x] (f (g g) x)))))]
+                (let [compute (Y (fn [f x] (+ 1 (f x))))]
+                  (compute 1)))))
   )
 
 (deftest polymorphic-upcast
@@ -398,14 +453,13 @@
          (tc ? (app inc' 1))))
   (is (= 'Num
          (tc ? (app inc' (ann 1 Num)))))
-  ;FIXME
-  (is (= '(All [a b :constraints #{[(IFn [Int :-> Int]
-                                         [Num :-> Num])
-                                    :<
-                                    [a :-> b]]}]
+  (is (= '(All [a [b :lower Int]
+                :constraints #{[(IFn [Int :-> Int]
+                                     [Num :-> Num])
+                                :<
+                                [a :-> b]]}]
            [a :-> b])
          (tc ? (app0 inc'))))
-  ;FIXME
   (is (= 'Int
          (tc ? (app2 +' 1 2))))
   (is (= 'Num

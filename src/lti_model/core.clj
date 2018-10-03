@@ -273,13 +273,16 @@
              :types ts})))
 
 (defn make-U [ts]
-  (let [ts (mapcat (fn [t]
-                     (if (= :Union (:op t))
-                       (:types t)
-                       [t]))
-                   ts)
-        ts (disj (set ts)
-                 -nothing)]
+  (let [ts (set
+             (mapcat (fn [t]
+                       (if (= :Union (:op t))
+                         (:types t)
+                         [t]))
+                     ts))
+        _ (assert (not (ts -nothing)))
+        ts (if (contains? ts -Num)
+             (disj ts -Int)
+             ts)]
     (cond
       (contains? ts -any) -any
       (= (count ts) 1) (first ts)
@@ -454,7 +457,7 @@
   {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))
    'appid (parse-type '(All [a] [[a :-> a] a :-> a]))
    'app0 (parse-type '(All [a b] [[a :-> b] :-> [a :-> b]]))
-   'app2 (parse-type '(All [a b c] [[a b :-> b] a b :-> c]))
+   'app2 (parse-type '(All [a b c] [[a b :-> c] a b :-> c]))
    'id (parse-type '(All [a] [a :-> a]))
    '+ (parse-type '[Int Int :-> Int])
    '+' (parse-type '(IFn [Int Int :-> Int]
@@ -1070,25 +1073,28 @@
         order (order-delays (:delay c))]
     (cond
       ; true if X's in delays are acyclic
-      order (let [c' (reduce (fn [c dly]
-                               (or (process-delay c dly)
-                                   (reduced nil)))
-                             c
-                             order)]
+      order (when-let [c' (reduce (fn [c dly]
+                                    (or (process-delay c dly)
+                                        (reduced nil)))
+                                  c
+                                  order)]
+              ;;FIXME this should be done in intersect-constraints?
               (update c' :delay #(into (or % #{}) (:delay c))))
       ;FIXME very rough, find fixpoint
-      :else (loop [c c
-                   delays (:delay c)]
+      :else (loop [fuel 100
+                   c c]
+              (assert (pos? fuel) "Out of fuel")
               (prn "cycle detected")
-              (let [c' (reduce (fn [c dly]
-                                 (or (process-delay c dly)
-                                     (reduced nil)))
-                               c
-                               order)
-                    c' (update c' :delay #(into (or % #{}) (:delay c)))]
-                (if (= c c')
-                  c
-                  (recur c' delays)))))))
+              (when-let [c' (reduce (fn [c dly]
+                                      (or (process-delay c dly)
+                                          (reduced nil)))
+                                    c
+                                    (:delay c))]
+                (let [;;FIXME this should be done in intersect-constraints?]
+                      c' (update c' :delay #(into (or % #{}) (:delay c)))]
+                  (if (= c c')
+                    c
+                    (recur (dec fuel) c'))))))))
 
 (defn synthesize-result [X {constraints :delay :as c} rng gs]
   {:pre [c]}
@@ -1199,7 +1205,18 @@
     :Union (make-U (map #(solve-app P % cargs) (:types cop)))
     :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
                           {::type-error true}))
-    :Closure (let [ifn (check {:op :IFn
+    :Closure (let [_ (assert *closure-cache*)
+                   _ (when *closure-cache*
+                       (swap! *closure-cache* update cop
+                              (fn [i]
+                                (let [i ((fnil inc 0) i)]
+                                  (if (< 20 i)
+                                    (throw (ex-info (str "Exceeded 'fn' checking limit, consider annotating: " (:expr cop)
+                                                         ;"\n" (mapv unparse-type cargs)
+                                                         )
+                                                    {::type-error true}))
+                                    i)))))
+                   ifn (check {:op :IFn
                                :methods [{:op :Fn
                                           :dom cargs
                                           :rng P}]}
@@ -1233,6 +1250,14 @@
             (case (:op body)
               :IFn (some #(solve-pmethod V X % P cargs gs existing-c) (:methods body))
               nil))))
+
+(declare check)
+
+(def ^:dynamic *closure-cache* nil)
+
+(defn check-form [P env e]
+  (binding [*closure-cache* (atom {})]
+    (check P env e)))
 
 #_
 (t/ann check [P Env E :-> T])
