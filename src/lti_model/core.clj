@@ -1196,6 +1196,8 @@
                 (when-let [smret (smallest-matching-super synth-res P)]
                   smret)))))))))
 
+(def ^:dynamic *closure-cache* nil)
+
 (defn solve-app [P cop cargs]
   (prn "solve-app" (:op cop))
   (prn "cop" (unparse-type cop))
@@ -1252,8 +1254,6 @@
               nil))))
 
 (declare check)
-
-(def ^:dynamic *closure-cache* nil)
 
 (defn check-form [P env e]
   (binding [*closure-cache* (atom {})]

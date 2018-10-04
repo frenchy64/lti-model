@@ -88,10 +88,6 @@
   (is (= '(All [a b :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]}]
             [a :-> b])
          (tc ? (app0 (fn [x] x)))))
-  ; (All [a b c :constraints [[Closure#1 <: [b :-> c]]
-  ;                           [Closure#2 <: [a :-> b]]]]
-  ;   [a :-> c])
-  ;FIXME
   (is (= '(All [a b c :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]
                                      [(Closure {} (fn [x] x)) :< [b :-> c]]}]
             [a :-> c])
@@ -102,11 +98,10 @@
          (tc [Int :-> Int]
              (comp (fn [x] x)
                    (fn [x] x)))))
-  ;FIXME
   (is (= '(All [a b c :constraints #{[(Closure {} (fn [x] (x x))) :< [a :-> b]]
                                      [(Closure {} (fn [x] x)) :< [b :-> c]]}]
             [a :-> c])
-         (tc ? ;[Int :-> Int]
+         (tc ?
              (comp (fn [x] x)
                    (fn [x] (x x))))))
   (is (tc-err [Int :-> (Seq Int)]
@@ -199,10 +194,6 @@
          (tc ?
              (let [f (fn [x] x)]
                (f 1)))))
-  (is (= 'Int
-         (tc ?
-             (let [f (fn [x] x)]
-               ((f f) 1)))))
   (is (= 'Int
          (tc ?
              (let [f (fn [x] x)]
@@ -303,6 +294,7 @@
              (mapT (fn [x] x)))))
   (is (tc (All [r1] [[r1 Num :-> r1] :-> [r1 Int :-> r1]])
           (mapT inc)))
+  ;FIXME
   (is (tc-err (All [r1] [[r1 (Seq Int) :-> r1] :-> [r1 Int :-> r1]])
               (mapT inc)))
   (is (= '(All [r1] [[r1 Num :-> r1] :-> [r1 Int :-> r1]])
@@ -464,4 +456,132 @@
          (tc ? (app2 +' 1 2))))
   (is (= 'Num
          (tc ? (app2 +' 1 (ann 2 Num)))))
+)
+
+(comment
+  ;Error messages
+  ;Unicode Arrows: ↘ ⟶ ⟵ ↙  
+  ;
+  ; The return type of `app` is Int, but the surrounding expression expected (Seq Int).
+  ;
+  ; 5|   (app id 1)
+  ;      ^^^^^^^^^^
+  ;
+  ; From the type of `app`, 
+  ; The result of that application flows to the return of `app` (3 -> 4), but
+  ; the result type did not agree with the expected type of the surrounding
+  ; context.
+  ;
+  ; In: (app id ; [2 -> 3]
+  ;          1  ; 1
+  ;          )  ;=> 4
+  ; # Function
+  ;         app : (All [a b] [[a -> b] a -> b])
+  ;         app :            [[2 -> 3] 1 -> 4]
+  ;
+  ; # Arguments
+  ;                         2    3
+  ;         id  : (All [a] [a -> a])
+  ;
+  ;               1
+  ;         1   : Int
+  ;
+  ; # Expected type
+  ;
+  ;               4
+  ; _exp  =     : (Seq Int)
+  ;
+  ; # Data flow diagram
+  ;
+  ; app : [[2 -> 5] 1 -> 6]
+  ; id  : [3 -> 4]
+  ;
+  ;      [[2 -> 5] 1 -> 6] [3 -> 4]
+  ;                        
+  ;                1 : Int
+  ;         /-----/
+  ;        2 : Int
+  ;         \--------------\   
+  ;                         3 : Int
+  ;                          \--\   
+  ;                              4 : Int
+  ;              /--------------/   
+  ;             5 : Int
+  ;              \-----\
+  ;                     6 : Int
+  ;
+  (is (tc-err (Seq Int) (app id 1)))
+
+  ; The return type of this expression is Int, but the surrounding expression expected (Seq Int).
+  ;
+  ; 5|   ((comp (fn [x] x)
+  ; 6|          (fn [x] x))
+  ; 7|    1)
+  ;      ^^^^^^^^^^^^^^^^^^
+  ;
+  ;  _fn   : (All [a b c :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]
+  ;                                     [(Closure {} (fn [x] x)) :< [b :-> c]]}]
+  ;            [a :-> c])
+  ;  _arg1 : Int
+  ;
+  ; # Data flow
+  ;
+  ; 5|   ((comp (fn [x] x)
+  ; 6|          (fn [x] x))
+  ; 7|    1)
+  ;
+  ;  (comp ...) : [1 -> 6]
+  ;  (fn [x] x) : [2 -> 3]
+  ;  (fn [x] x) : [4 -> 5]
+  ;
+  ;    [1 -> 6] [2 -> 3] [4 -> 5]
+  ;
+  ;     1 : Int
+  ;      \------\
+  ;              2 : Int
+  ;               \--\
+  ;                   3 : Int
+  ;                    \-\
+  ;                       4 : Int
+  ;                        \--\
+  ;                            5 : Int
+  ;           /---------------/
+  ;          6 : Int
+
+  (is (tc-err (Seq Int)
+              ((comp (fn [x] x)
+                     (fn [x] x))
+               1)))
+  ; 2| (f f)      : [1 -> 4]
+  ; 1| (fn [x] x) : [2 -> 3]
+  ;
+  ;    [1 -> 4] [2 -> 3]
+  ;
+  ;     1 : Int
+  ;      \------\
+  ;              2 : Int
+  ;               \--\
+  ;                   3 : Int
+  ;           /------/
+  ;          4 : Int
+
+  (is (= 'Int
+         (tc ?
+             (let [f (fn [x] x)]
+               ((f f) 1)))))
+  ; 1| (mapT inc) : [[1 2 -> 3] -> [4 5 -> 6]]
+  ; 1|       inc  : [7 -> 8]
+  ;
+  ;    [[1 2 -> 3] -> [4 5 -> 6]] [7 -> 8]
+  ;
+  ;                      5 : Int
+  ;                       \-------\
+  ;                                7 : Int
+  ;                                 \--\
+  ;                                     8 : Int
+  ;         /--------------------------/
+  ;        2 : Int
+ 
+  (is (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
+          (mapT inc)))
 )
