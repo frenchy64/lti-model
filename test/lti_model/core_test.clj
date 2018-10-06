@@ -88,6 +88,15 @@
   (is (= '(All [a b :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]}]
             [a :-> b])
          (tc ? (app0 (fn [x] x)))))
+  (is (= '[Int :-> Int]
+         (tc [Int :-> Int]
+             (app0 (fn [x] x)))))
+  (is (= '[Num :-> Num]
+         (tc [Num :-> Num]
+             (app0 (fn [x] x)))))
+  (is (= '[Int :-> Int]
+         (tc [Int :-> ?]
+             (app0 (fn [x] x)))))
   (is (= '(All [a b c :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]
                                      [(Closure {} (fn [x] x)) :< [b :-> c]]}]
             [a :-> c])
@@ -322,7 +331,6 @@
   (is (= '[[Int :-> Int] Int :-> Int]
          (tc [[Int :-> Int] Int :-> Int]
              appid)))
-  ;TODO
   (is (= 'Int
          (tc ?
              (appid id 0))))
@@ -492,23 +500,26 @@
   ; _exp  =     : (Seq Int)
   ;
   ; # Data flow diagram
+  ;                            +    -  -    +
+  ;         app : (All [a b] [[a -> b] a -> b])
   ;
+  ;         +    -  -    +
   ; app : [[2 -> 5] 1 -> 6]
   ; id  : [3 -> 4]
   ;
   ;      [[2 -> 5] 1 -> 6] [3 -> 4]
   ;                        
-  ;                1 : Int
+  ;                1 : Int         Int <: a <: Any
   ;         /-----/
-  ;        2 : Int
+  ;        2 : a[Int/a]
   ;         \--------------\   
-  ;                         3 : Int
-  ;                          \--\   
-  ;                              4 : Int
+  ;                         3 : a[Int/a]
+  ;                          \--\
+  ;                              4 : Int 
   ;              /--------------/   
-  ;             5 : Int
+  ;             5 : Int            Int <: b <: Any
   ;              \-----\
-  ;                     6 : Int
+  ;                     6 : b[Int/b]
   ;
   (is (tc-err (Seq Int) (app id 1)))
 
@@ -528,7 +539,7 @@
   ;
   ; 5|   ((comp (fn [x] x)
   ; 6|          (fn [x] x))
-  ; 7|    1)
+  ; 7|    42)
   ;
   ;  (comp ...) : [1 -> 6]
   ;  (fn [x] x) : [2 -> 3]
@@ -568,20 +579,195 @@
   (is (= 'Int
          (tc ?
              (let [f (fn [x] x)]
-               ((f f) 1)))))
+               ((f f) 42)))))
+  (is (tc ?
+          (let [f (fn [x] x)]
+            (f f))))
   ; 1| (mapT inc) : [[1 2 -> 3] -> [4 5 -> 6]]
   ; 1|       inc  : [7 -> 8]
   ;
+  ;      + +    -      - -    +    +    -
+  ;      r b    r      r a    r    a    b
   ;    [[1 2 -> 3] -> [4 5 -> 6]] [7 -> 8]
   ;
-  ;                      5 : Int
-  ;                       \-------\
+  ;      1 : r1                            r1 <: r <: Any
+  ;      \ 2 : Int                        Int <: b <: Any
+  ;       \-\--\
+  ;             3 : r1                     r1 <: r <: Any
+  ;
+  ;                    4 : r1
+  ;                    \ 5 : Int          Int <: a <: Any
+  ;                     \-\--\
+  ;                           6 : r1       r1 <: r <: Any
+  ;
   ;                                7 : Int
   ;                                 \--\
-  ;                                     8 : Int
-  ;         /--------------------------/
-  ;        2 : Int
- 
+  ;                                     8 : Int   Int <: b <: Any
+  ; 
+  ;
+  ; r = r1
+  ; a = Int
+  ; b = Int
   (is (tc (All [r1] [[r1 Int :-> r1] :-> [r1 Int :-> r1]])
           (mapT inc)))
+
+  ; Goal: generate substitution for LHS
+  ; This says, for every instantiation of the LHS, there exists
+  ; a substitution for the right hand side that makes it a supertype.
+  ; (All [a] [a :-> a]) <: (All [b] [b :-> b])
+  ; [Nothing -> Nothing] <: [Any -> Any]
+  ;
+  ; 1| id : [1 -> 2]
+  ;
+  ;    [1 -> 2]
+  ;     1 : b                            b <: a <: Any
+  ;          2 : b                            b <: a <: Any
+  ;
+  (is (= '(All [b] [b :-> b])
+         (tc (All [b] [b :-> b])
+             id)))
+
+  ; (All [a] [a :-> a]) <: [Int -> Int]
+  ;
+  ; 1| id : [1 -> 2]
+  ;
+  ;    [1 -> 2]
+  ;     1 : Int                            Int <: a <: Any
+  ;          2 : Int                       Int <: a <: Any
+  (is (= '[Int :-> Int]
+         (tc [Int :-> Int]
+             id)))
+
+  ;  (mapT (fn [x] x)) : (All [a b r :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]}]
+  ;                        [[r b :-> r] :-> [r a :-> r]])
+  ;
+  ; (All [a b r :constraints #{[(Closure {} (fn [x] x)) :< [a :-> b]]}]
+  ;   [[r b :-> r] :-> [r a :-> r]])
+  ; <:
+  ; (All [r1]
+  ;   [[r1 ? :-> r1] :-> [r1 Int :-> r1]])
+  ;
+  ;  arg1: [r1 ? :-> r1] <: [r b :-> r]
+  ;   => b <: ?
+  ;   => r <: r1
+  ;   => r1 <: r
+  ;  ret: [r a :-> r] <: [r1 Int :-> r1]
+  ;   => Int <: a
+  ;   => r1 <: r
+  ;   => r <: r1
+  ;  constraint1: (Closure {} (fn [x] x)) :< [a :-> b]
+  ;
+  ; 1| (mapT (fn [x] x)) : [[1 2 -> 3] -> [4 5 -> 6]]
+  ; 1|       (fn [x] x)  : [7 -> 8]
+  ;
+  ;      + +    -      - -    +    +    -
+  ;      r b    r      r a    r    a    b
+  ;    [[1 2 -> 3] -> [4 5 -> 6]] [7 -> 8]
+  ;
+  ;      1 : r1                            r1 <: r <: Any
+  ;      \ 2 : ?                          Bot <: b <: Any
+  ;       \-\--\
+  ;             3 : r1                    
+  ;
+  ;                    4 : r1
+  ;                    \ 5 : Int          Int <: a <: Any
+  ;                     \-\--\
+  ;                           6 : r1       
+  ;
+  ;                                7 : Int
+  ;                                 \--\
+  ;                                     8 : Int   Int <: b <: Any
+  ; 
+  ;      1 : r1                            
+  ;      \ 2 : Int                        
+  ;       \-\--\
+  ;             3 : r1                     
+  ;
+  ; r = r1
+  ; a = Int
+  ; b = Int
+  (is (tc (All [r1] [[r1 ? :-> r1] :-> [r1 Int :-> r1]])
+          (mapT (fn [x] x))))
+
+  ; 1| (reduce ...) : [[1 2 :-> 3] 4 (Seq 5) :-> 6]
+  ; 2| 0            : Int
+  ; 3| [1 2 3]      : (Seq Int)
+  ;
+  ;    [[1 2 :-> 3] 4 (Seq 5) :-> 6]
+  ;
+  ;                 4 : Int
+  ;       /--------/       5 : Int
+  ;      /  /-------------/
+  ;      1 : Int
+  ;      \ 2 : Int
+  ;       \-\---\
+  ;              3 : Int
+  ;               \--------------\
+  ;                               6 : Int
+  (is (= 'Int
+         (tc ?
+             (reduce (fn [x y] x)
+                     0
+                     [1 2 3]))))
+
+  ; 1| (reduce ...)       : [[1 2 :-> 3] 4 (Seq 5) :-> 6]
+  ; 1| (fn [x y] (+ x y)) : [7 8 -> 9]
+  ; 2| 0                  : Int
+  ; 3| [1.0 2 3]          : (Seq Num)
+  ;      
+  ;      + +     -  -      -     +   + +    -
+  ;      a c     a  a      c     a   a c    a
+  ;    [[1 2 :-> 3] 4 (Seq 5) -> 6] [7 8 -> 9]
+  ;
+  ;                 4 : Int                         Int <: a <: Any
+  ;       /--------/       5 : Num                  Num <: c <: Any
+  ;      /                /
+  ;      1 : Int         /                        
+  ;      |  /-----------/
+  ;      \ 2 : Num
+  ;       \-\-----------------------\
+  ;          \                       7 : Int
+  ;           \                       \-------
+  ;            \----------------------\       \
+  ;                                    8 : Num \
+  ;                                     \--\ /-/
+  ;                                         9 : Num
+  ;               /------------------------/
+  ;              3 : Num                            Num <: a <: Any
+  ;       /-----/
+  ;      1 : Num
+  ;       \-------------------------\
+  ;                                  7 : Num
+  ;                                   \----\ 
+  ;                                         9 : Num 
+  ;               /------------------------/
+  ;              3 : Num 
+  ;               \-------------\
+  ;                              6 : Num 
+  (is (= 'Num
+         (tc ?
+             (reduce (fn [x y] (+ x y))
+                     0
+                     [1.0 2 3]))))
+
+  ; 1| appid : [[1 -> 2] 3 -> 4]
+  ; 2| id    : [5 -> 6]
+  ; 3| 0     : Int
+  ;
+  ;    [[1 -> 2] 3 -> 4] [5 -> 6]
+  ;
+  ;              3 : Int
+  ;       /-----/
+  ;      1 : Int
+  ;       \--------------\
+  ;                       5 : Int
+  ;                        \--\
+  ;                            6 : Int
+  ;            /--------------/
+  ;           2 : Int
+  ;            \-----\
+  ;                   4 : Int
+  (is (= 'Int
+         (tc ?
+             (appid id 0))))
 )
