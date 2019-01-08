@@ -160,6 +160,8 @@
             [[r b :-> r] :-> [r a :-> r]])
          (tc ?
              (mapT inc'))))
+  (is (tc-err [Int :-> Int :-> Int]
+              (fn [a b c] c)))
   )
 
 (deftest id-cast-test
@@ -292,6 +294,257 @@
                           (fn [y']
                             ;return id
                             (fn [i] i)))))))))))))
+  ; invoke f3
+  (is
+    (=    '[Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]
+       (tc [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]
+           ((let [pair (fn [x] ; original f and x ordering
+                         (fn [f]
+                           ((f x) x)))]
+              (let [f1 (fn [x] (pair x))]
+                (let [f2 (fn [x] (f1 (f1 x)))]
+                  (let [f3 (fn [x] (f2 (f2 x)))]
+                    (fn [z] ((f3 (fn [x] x)) z))))))
+            (fn [x']
+              (fn [y']
+                (fn [x]
+                  (fn [y]
+                    (fn [x']
+                      (fn [y']
+                        ;return id
+                        (fn [i] i)))))))))))
+  ; invoke f2
+  (is
+    (=    '[Int :-> [Int :-> [Int :-> Int]]]
+       (tc [Int :-> [Int :-> [Int :-> Int]]]
+           ((let [pair (fn [x] ; original f and x ordering
+                         (fn [f]
+                           ((f x) x)))]
+              (let [f1 (fn [x] (pair x))]
+                (let [f2 (fn [x] (f1 (f1 x)))]
+                  (fn [z] ((f2 (fn [x] x)) z)))))
+            (fn [x]
+              (fn [y]
+                (fn [x']
+                  (fn [y']
+                    ;return id
+                    (fn [i] i)))))))))
+  (is (= '[Int :-> Int]
+         (tc [Int :-> Int]
+             (let [id (fn [a] a)]
+               id))))
+  (is (= '[Int :-> [Int :-> Int]]
+         (tc [Int :-> [Int :-> Int]]
+             (let [id (fn [a] (fn [b] b))]
+               id))))
+  ; invoke f1
+  (is
+    (=    '[Int :-> Int]
+       (tc [Int :-> Int]
+           ((let [pair (fn [x]
+                         (fn [sel]
+                           ((sel x) x)))]
+              (let [p1 (fn [x] (pair x))
+                    zero (fn [x] x)]
+                (fn [sel] ((p1 zero) sel))))
+            (fn [fst]
+              (fn [snd]
+                fst))))))
+  (is (= '[[Int :-> Any] :-> Any]
+         (tc [[Int :-> Any] :-> Any]
+             (fn [f]
+               (f 1)))))
+  (is (= '[[[Int :-> Int] :-> Any]
+           :-> Any]
+         (tc [[[Int :-> Int] :-> Any]
+              :-> Any]
+             (fn [f]
+               (f (fn [a] a))))))
+  ; ascribe type f1
+  (is
+    (=    '[[[Int :-> Int] :-> [[Int :-> Int] :-> [Int :-> Int]]] :-> [Int :-> Int]]
+       (tc [[[Int :-> Int] :-> [[Int :-> Int] :-> [Int :-> Int]]] :-> [Int :-> Int]]
+           (let [pair (fn [x]
+                        (fn [sel]
+                          ((sel x) x)))]
+             (let [p1 (fn [x] (pair x))
+                   zero (fn [x] x)]
+               (fn [sel] ((p1 zero) sel)))))))
+  ; invoke type p2
+  (is
+    (=    '[Int :-> Int]
+       (tc [Int :-> Int]
+           ((let [pair (fn [x]
+                         (fn [sel]
+                           ((sel x) x)))]
+              (let [p1 (fn [x] (pair x))]
+                (let [p2 (fn [x] (p1 (p1 x)))]
+                  (let [zero (fn [x] x)]
+                    (fn [sel] ((p2 zero) sel))))))
+            (fn [x]
+              (fn [x]
+                (fn [i] i)))))))
+  ; ascribe type x1 (from Mairson 1989)
+  (is
+    (=    '[[[Int :-> Int] :-> [[Int :-> Int] :-> [Int :-> Int]]] :-> [Int :-> Int]]
+       (tc [[[Int :-> Int] :-> [[Int :-> Int] :-> [Int :-> Int]]] :-> [Int :-> Int]]
+           (let [pair (fn [x]
+                        (fn [y]
+                          (fn [z]
+                            ((z x) y))))]
+             (let [x1 (fn [y] ((pair y) y))]
+               (x1 (fn [y] y)))))))
+  ; ascribe type x1 (from Mairson 1989), but more Clojurey
+  (is
+    (=    '[[Int Int :-> Any] :-> Any]
+       (tc [[Int Int :-> Any] :-> Any]
+          ;< Int,Int                 >
+           ; <a,b> is [[a b :-> c] :-> c]
+           (let [pair (fn [x y]
+                        (fn [z]
+                          (z x y)))
+                 fst (fn [p]
+                       (p (fn [x y]
+                            x)))
+                 snd (fn [p]
+                       (p (fn [x y]
+                            y)))]
+             (let [x1 #(pair % %)]
+               (x1 1))))))
+  ; ascribe type x2 (from Mairson 1989), but more Clojurey
+  (is
+    (=    '[[[[Int Int :-> Any] :-> Any] [[Int Int :-> Any] :-> Any] :-> Any] :-> Any]
+       (tc [[[[Int Int :-> Any] :-> Any] [[Int Int :-> Any] :-> Any] :-> Any] :-> Any]
+          ;< < Int,Int                 >,< Int,Int                 >                 >
+           ; Pair is [x y :-> [x y :-> Any]]
+           (let [pair (fn [x y]
+                        (fn [z]
+                          (z x y)))
+                 fst (fn [p]
+                       (p (fn [x y]
+                            x)))
+                 snd (fn [p]
+                       (p (fn [x y]
+                            y)))]
+             (let [x1 #(pair % %)]
+               (let [x2 #(x1 (x1 %))]
+                 ; <<1,1>,<1,1>>
+                 (x2 1)))))))
+  ;checks (x5)
+  (is
+     (tc Any
+         (let [pair (fn [x y]
+                      (fn [z]
+                        (z x y)))
+               fst (fn [p]
+                     (p (fn [x y]
+                          x)))
+               snd (fn [p]
+                     (p (fn [x y]
+                          y)))]
+           (let [x1 #(pair % %)]
+             (let [x2 #(x1 (x1 %))]
+             (let [x3 #(x2 (x2 %))]
+             (let [x4 #(x3 (x3 %))]
+             (let [x5 #(x4 (x4 %))]
+             (let [x6 #(x5 (x5 %))]
+             (let [x7 #(x6 (x6 %))]
+             (let [x8 #(x7 (x7 %))]
+             (let [x9 #(x8 (x8 %))]
+             (let [x10 #(x9 (x9 %))]
+               (x5 1))))))))))))))
+  ;hits fn checking limit (x6)
+  (is
+     (tc-err Any
+         (let [pair (fn [x y]
+                      (fn [z]
+                        (z x y)))
+               fst (fn [p]
+                     (p (fn [x y]
+                          x)))
+               snd (fn [p]
+                     (p (fn [x y]
+                          y)))]
+           (let [x1 #(pair % %)]
+             (let [x2 #(x1 (x1 %))]
+             (let [x3 #(x2 (x2 %))]
+             (let [x4 #(x3 (x3 %))]
+             (let [x5 #(x4 (x4 %))]
+             (let [x6 #(x5 (x5 %))]
+             (let [x7 #(x6 (x6 %))]
+             (let [x8 #(x7 (x7 %))]
+             (let [x9 #(x8 (x8 %))]
+             (let [x10 #(x9 (x9 %))]
+               (x6 1))))))))))))))
+  ;hits fn checking limit (x8)
+  (is
+     (tc-err Any
+         (let [pair (fn [x y]
+                      (fn [z]
+                        (z x y)))
+               fst (fn [p]
+                     (p (fn [x y]
+                          x)))
+               snd (fn [p]
+                     (p (fn [x y]
+                          y)))]
+           (let [x1 #(pair % %)]
+             (let [x2 #(x1 (x1 %))]
+             (let [x3 #(x2 (x2 %))]
+             (let [x4 #(x3 (x3 %))]
+             (let [x5 #(x4 (x4 %))]
+             (let [x6 #(x5 (x5 %))]
+             (let [x7 #(x6 (x6 %))]
+             (let [x8 #(x7 (x7 %))]
+             (let [x9 #(x8 (x8 %))]
+             (let [x10 #(x9 (x9 %))]
+               (x8 1))))))))))))))
+  ;hits fn checking limit (x10)
+  (is
+     (tc-err Any
+         (let [pair (fn [x y]
+                      (fn [z]
+                        (z x y)))
+               fst (fn [p]
+                     (p (fn [x y]
+                          x)))
+               snd (fn [p]
+                     (p (fn [x y]
+                          y)))]
+           (let [x1 #(pair % %)]
+             (let [x2 #(x1 (x1 %))]
+             (let [x3 #(x2 (x2 %))]
+             (let [x4 #(x3 (x3 %))]
+             (let [x5 #(x4 (x4 %))]
+             (let [x6 #(x5 (x5 %))]
+             (let [x7 #(x6 (x6 %))]
+             (let [x8 #(x7 (x7 %))]
+             (let [x9 #(x8 (x8 %))]
+             (let [x10 #(x9 (x9 %))]
+               (x10 1))))))))))))))
+;Notes on lambda encoding of pairs
+;           (let [; a Pair is [Int :-> [Int :-> Int]]
+;                 ; [Int :-> [Int :-> Pair]]
+;                 pair (fn [x]
+;                        (fn [y]
+;                          (fn [z]
+;                            ((z x) y))))
+;                 ; [Pair :-> Int]
+;                 fst (fn [p]
+;                       (p (fn [x]
+;                            (fn [y]
+;                              x))))
+;                 ; [Pair :-> Int]
+;                 snd (fn [p]
+;                       (p (fn [x]
+;                            (fn [y]
+;                              y))))]
+;             (let [; x1 creates a pair <y,y>
+;                   x1 (fn [y] ((pair y) y))]
+;               (let [; x2 creates the pair <<y,y>,<y,y>>
+;                     x2 (fn [y] (x1 (x1 y)))]
+;                 (x2 1))))
+
 ; TODO another terrible error message
 #_
   (is
@@ -401,17 +654,6 @@
                  x)))))
 
   ; f1 + f2
-  (is
-    (= '[[[Int :-> Int] :-> Int]
-         :-> Int]
-       (tc [[[Int :-> Int] :-> Int]
-            :-> Int]
-           (let [pair (fn [f]
-                        (fn [x]
-                          ((f x) x)))]
-             (let [f1 (fn [x] (pair x))]
-               (let [f2 (fn [x] (f1 (f1 x)))]
-                 (fn [z] ((f2 (fn [x] x)) z))))))))
   (is (tc-err ?
               (let [f (ann id (All [a b] [a :-> b]))]
                 (f 1))))
@@ -571,13 +813,6 @@
                          (fn [g] (fn [x] (f (g g) x)))))]
                 (let [compute (Y (fn [f x] (+ 1 (f x))))]
                   (compute 1)))))
-  (is (tc ?
-            (let [Y (fn [f]
-                      ((fn [g] (fn [x] (f (g g) x)))
-                       (fn [g] (fn [x] (f (g g) x)))))]
-              (let [compute (Y (ann (fn [f x] (+ 1 (f x)))
-                                    [[Int :-> Int] Int :-> Int]))]
-                (compute 1)))))
   )
 
 (deftest polymorphic-upcast

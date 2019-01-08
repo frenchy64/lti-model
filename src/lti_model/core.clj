@@ -103,6 +103,7 @@
 (defn IFn? [t] (= :IFn (:op t)))
 (defn Base? [t] (= :Base (:op t)))
 (defn Poly? [t] (= :Poly (:op t)))
+(defn Closure? [t] (= :Closure (:op t)))
 (defn Fn? [t] (= :Fn (:op t)))
 
 ; Name Expr -> Scope
@@ -293,7 +294,10 @@
 (defn parse-type [t]
   (let [parse-fn-arity (fn [t]
                          {:pre [(vector? t)]}
-                         (let [[args [_ ret]] (split-with (complement #{:->}) t)]
+                         (let [[args [_ ret & more]] (split-with (complement #{:->}) t)]
+                           (when more
+                             (throw (ex-info (str "Extra arguments after :-> in function type: " more)
+                                             {::type-error true})))
                            {:op :Fn
                             :dom (mapv parse-type args)
                             :rng (parse-type ret)}))]
@@ -473,7 +477,7 @@
    'intoT (parse-type '(All [a b] [(Seq b) (All [r] [[r b :-> r] :-> [r a :-> r]]) (Seq a) :-> (Seq b)]))
    })
 
-(declare subtype?)
+(declare subtype? check)
 
 (defn subtype-Fn? [s t]
   {:pre [(= :Fn (:op s))
@@ -519,28 +523,37 @@
          (not= -wild s)
          (not= -wild t)]
    :post [(boolean? %)]}
+  ;(prn "subtype?")
+  ;(prn "s" (unparse-type s))
+  ;(prn "t" (unparse-type t))
   (cond
     (or (= s t) 
         (= -any t)
         (= -nothing s))
     true
+
     (= :Intersection (:op t)) (every? #(subtype? s %) (:types t))
     (= :Intersection (:op s)) (boolean (some #(subtype? % t) (:types s)))
     (= :Union (:op t)) (boolean (some #(subtype? % t) (:types s)))
     (= :Union (:op s)) (every? #(subtype? % t) (:types s))
+
     (and (IFn? s)
          (IFn? t))
     (every? #(boolean
                (some (fn [s] (subtype-Fn? s %))
                      (:types s)))
             (:types t))
+
     (and (= :Seq (:op s))
          (= :Seq (:op t)))
     (subtype? (:type s) (:type t))
+
     (= :Base (:op s))
     (boolean
       (when-let [s (base-supers s)]
         (subtype? (make-U s) t)))
+
+    (Closure? s) (boolean (check t (:env s) (:expr s)))
     :else false))
 
 (declare match-dir)
@@ -640,11 +653,11 @@
     (let [sols (mapv (fn [m]
                        (let [dom (:dom m)
                              rng (:rng m)
-                             _ (prn "Poly IFn match")
-                             _ (prn "dom" (mapv unparse-type dom))
-                             _ (prn "rng" (unparse-type rng))
+                             ;_ (prn "Poly IFn match")
+                             ;_ (prn "dom" (mapv unparse-type dom))
+                             ;_ (prn "rng" (unparse-type rng))
                              sol (solve-app rng t dom)]
-                         (prn "sol Poly IFn match" (some-> sol unparse-type))
+                         ;(prn "sol Poly IFn match" (some-> sol unparse-type))
                          ; FIXME is "smallest" correct here?
                          (when-let [ret (and sol
                                              (smallest-matching-super sol rng))]
@@ -668,6 +681,9 @@
           (Poly* (mapv :name P-gs)
                  sol
                  :original-names (mapv :original-name P-gs)))))
+
+    (Closure? t)
+    (check P (:env t) (:expr t))
 
     (and (= :Seq (:op t))
          (= :Seq (:op P)))
@@ -904,9 +920,9 @@
          (:op s)
          (:op t)]
    :post [((some-fn map? nil?) %)]}
-  (prn "gen-constraint")
-  (prn "s" (unparse-type s))
-  (prn "t" (unparse-type t))
+  ;(prn "gen-constraint")
+  ;(prn "s" (unparse-type s))
+  ;(prn "t" (unparse-type t))
   ;(assert (not= -wild s) s)
   ;(assert (not= -wild t) t)
   (cond
@@ -985,10 +1001,10 @@
 (defn order-delays [delays]
   {:pre [(every? (comp set? :depends) delays)
          (every? (comp set? :provides) delays)]}
-  (prn "order-delays" (unparse-delays delays))
-  (prn "graph" (delays->graph delays))
+  ;(prn "order-delays" (unparse-delays delays))
+  ;(prn "graph" (delays->graph delays))
   (when-let [order (topo/kahn-sort (delays->graph delays))]
-    (prn "sorted order" order)
+    ;(prn "sorted order" order)
     (let [delay-order (mapv
                         (fn [sym]
                           (set (filter #(or (contains? (:depends %) sym)
@@ -1175,36 +1191,41 @@
          (Fn? m)
          (vector? gs)
          ((some-fn nil? map?) existing-c)]}
-  (prn "solve-pmethod" (unparse-type m) (unparse-type P) (mapv unparse-type cargs))
+  ;(prn "solve-pmethod" (unparse-type m) (unparse-type P) (mapv unparse-type cargs))
   (when (= (count (:dom m))
            (count cargs))
     (let [cdom (mapv #(gen-constraint V X %1 %2) cargs (:dom m))
-          _ (prn "cdom" (map unparse-cset cdom))
+          ;_ (prn "cdom" (map unparse-cset cdom))
           rng (:rng m)]
       (when-let [exp (largest-matching-sub -any P)]
-        (prn "rng" (unparse-type rng))
-        (prn "expected return" (unparse-type exp))
+        ;(prn "rng" (unparse-type rng))
+        ;(prn "expected return" (unparse-type exp))
         (let [crng (gen-constraint V X rng exp)]
           ;(prn "crng" (unparse-cset crng))
           ;(prn "existing-c" (unparse-cset existing-c))
           (when-let [c (intersect-constraints
                          (concat [crng existing-c] cdom))]
-            (prn "intersected" (unparse-cset c))
+            ;(prn "intersected" (unparse-cset c))
             (when-let [c (process-delays c)]
-              (prn "c delays" (unparse-delays (:delay c)))
+              ;(prn "c delays" (unparse-delays (:delay c)))
               (when-let [synth-res (synthesize-result X c rng gs)]
-                (prn "synth-res" (unparse-type synth-res))
+                ;(prn "synth-res" (unparse-type synth-res))
                 (when-let [smret (smallest-matching-super synth-res P)]
                   smret)))))))))
 
 (def ^:dynamic *closure-cache* nil)
 
 (defn solve-app [P cop cargs]
-  (prn "solve-app" (:op cop))
-  (prn "cop" (unparse-type cop))
-  (prn "P" (unparse-type P))
-  (prn "cargs" (mapv unparse-type cargs))
+  ;(prn "solve-app" (:op cop))
+  ;(prn "cop" (unparse-type cop))
+  ;(prn "P" (unparse-type P))
+  ;(prn "cargs" (mapv unparse-type cargs))
   (case (:op cop)
+    :Intersection (let [successes (keep #(solve-app P % cargs) (:types cop))]
+                    (when (empty? successes)
+                      (throw (ex-info (str "Cannot invoke " (unparse-type cop))
+                                      {::type-error true})))
+                    (make-I successes))
     :Union (make-U (map #(solve-app P % cargs) (:types cop)))
     :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
                           {::type-error true}))
@@ -1267,8 +1288,8 @@
          (map? env)]
    :post [(:op %)]}
   (cond
-    (symbol? e) (let [t (or (constant-type e)
-                            (get env e)
+    (symbol? e) (let [t (or (get env e)
+                            (constant-type e)
                             (assert nil (str "Bad symbol" e)))
                       m (smallest-matching-super t P)]
                   (check-match t P m e))
@@ -1279,13 +1300,19 @@
     (seq? e) (let [[op & args] e
                    _ (assert (seq e))]
                (case op
-                 ann (let [[e' at] args
+                 ann (let [[e' at & more] args
+                           _ (when more
+                               (throw (ex-info (str "Extra arguments to 'ann': " more)
+                                               {::type-error true})))
                            _ (assert (= 2 (count args)))
                            t (check (parse-type at) env e')
                            m (smallest-matching-super t P)]
-                       (prn "ann")
+                       ;(prn "ann")
                        (check-match t P m e))
-                 let (let [[b body] args
+                 let (let [[b body & more] args
+                           _ (when more
+                               (throw (ex-info (str "Extra arguments to 'let': " more)
+                                               {::type-error true})))
                            _ (assert (= 2 (count args)))
                            _ (assert (even? (count b)))
                            _ (assert (vector? b))
@@ -1293,7 +1320,11 @@
                        (check P env
                               (list* (list 'fn (mapv first b) body)
                                      (map second b))))
-                 fn (let [[plist body] args
+                 (fn fn*)
+                   (let [[plist body & more] args
+                         _ (when more
+                             (throw (ex-info (str "Extra arguments to 'fn': " more)
+                                             {::type-error true})))
                           t (cond
                               (= -wild P) {:op :Closure
                                            :env env
@@ -1304,10 +1335,14 @@
                                                          {:pre [(Fn? m)]
                                                           :post [(Fn? %)]}
                                                          (when-not (= (count plist) (count (:dom m)))
-                                                           (throw (ex-info (str "Function does not match expected number of parameters")
+                                                           (throw (ex-info (str "Function does not match expected number of parameters"
+                                                                                "\nActual:\n\t" (count plist)
+                                                                                "\nExpected:\n\t" (count (:dom m))
+                                                                                "\nExpected type:\n\t" (unparse-type m)
+                                                                                "\nin:\n\t" e)
                                                                            {::type-error true})))
-                                                         (prn "checking lambda" e)
-                                                         (prn "method" (unparse-type m))
+                                                         ;(prn "checking lambda" e)
+                                                         ;(prn "method" (unparse-type m))
                                                          (let [;demote wildcards
                                                                ; FIXME if we have wildcards in the domain, it might be more useful to return
                                                                ; a Closure type after verifying this arity matches. But what if
