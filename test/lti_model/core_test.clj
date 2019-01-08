@@ -430,6 +430,17 @@
                (let [x2 #(x1 (x1 %))]
                  ; <<1,1>,<1,1>>
                  (x2 1)))))))
+  ;checks (x4)
+  (is
+     (tc Any
+         (let [pair (fn [x y]
+                      (fn [z]
+                        (z x y)))]
+           (let [x1 #(pair % %)]
+           (let [x2 #(x1 (x1 %))]
+           (let [x3 #(x2 (x2 %))]
+           (let [x4 #(x3 (x3 %))]
+             (x4 1))))))))
   ;checks (x5)
   (is
      (tc Any
