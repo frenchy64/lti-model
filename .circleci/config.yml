@@ -1,0 +1,9 @@
+version: 2
+jobs:
+   build:
+     working_directory: ~/lti-model
+     docker:
+       - image: circleci/clojure:lein-2.7.1
+     steps:
+       - checkout
+       - run: lein test
