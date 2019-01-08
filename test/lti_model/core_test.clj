@@ -467,6 +467,36 @@
                            (fst
                              (fst
                                (x4 1)))))))))))))))))
+  ; FIXME BUG! returns Nothing
+; x4 with 9 fst's, but with polymorphic annotation on 'pair'
+#_
+  (is
+    (= 'Int
+       (tc ?
+           (let [pair (ann (fn [x y]
+                             (fn [z]
+                               (z x y)))
+                           (All [a b c]
+                             [a b :-> [[a b :-> c] :-> c]]))
+                 fst (fn [p]
+                       (p (fn [x y]
+                            x)))
+                 snd (fn [p]
+                       (p (fn [x y]
+                            y)))]
+             (let [x1 #(pair % %)]
+             (let [x2 #(x1 (x1 %))]
+             (let [x3 #(x2 (x2 %))]
+             (let [x4 #(x3 (x3 %))]
+               (fst
+                 (fst
+                   (fst
+                     (fst
+                       (fst
+                         (fst
+                           (fst
+                             (fst
+                               (x4 1)))))))))))))))))
   ;checks (x5)
   (is
      (tc Any
