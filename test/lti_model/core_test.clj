@@ -21,6 +21,9 @@
      (do (tc ~P ~e)
          false)))
 
+; dummy to evaluate code in this ns
+(defmacro ann [e t] e)
+
 (deftest check-test
   (is (= 'Int
          (tc Int 1)))
@@ -35,8 +38,14 @@
   (is (= '(Closure {} (fn [x] [1 2]))
          (tc ? (fn [x] [1 2]))))
   ;; FIXME
+  ; perhaps could be more helpful? need a Nothing to invoke this...
   (is (= '[Nothing :-> Int]
          (tc [? :-> Int] (fn [x] 1))))
+  ; again: sort of weird but I don't think this is unsound,
+  ; because you need to provide an [Int -> Nothing]
+  ; function to invoke it
+  (is (= '[[Int :-> Nothing] :-> Int]
+         (tc [[Int :-> ?] :-> Int] (fn [f] (f 1)))))
   (is (= '[Int :-> Int]
          (tc [Int :-> Int] (fn [x] x))))
   (is (tc-err [Int :-> Nothing] (fn [x] x)))
@@ -154,6 +163,9 @@
   )
 
 (deftest id-cast-test
+  (is (= '(All [a] [a :-> a])
+         (tc (All [a] [a :-> a])
+             (fn [x] x))))
   (is (= '(All [a b c] [a :-> a])
          (tc (All [a b c] [a :-> a])
              id)))
@@ -208,22 +220,22 @@
              (let [f (fn [x] x)]
                ((f f) 1)))))
   ; not exponential like let-polymorphism: https://cs.stackexchange.com/questions/6617/concise-example-of-exponential-cost-of-ml-type-inference
+; # let pair x f = f x x;;
 ; # let f1 x = pair x in
 ;   let f2 x = f1 (f1 x) in
 ;   let f3 x = f2 (f2 x) in
 ;   fun z -> f3 (fun x -> x) z;;
   (is
     (= 'Int
-       (tc Int
-           ((let [pair (fn [f]
+       (tc ?
+           ((let [pair (fn [f] ; flipped f and x
                          (fn [x]
                            ((f x) x)))]
               (let [f1 (fn [x] (pair x))]
                 (let [f2 (fn [x] (f1 (f1 x)))]
                   (let [f3 (fn [x] (f2 (f2 x)))]
                     (let [f4 (fn [x] (f3 (f3 x)))]
-                      (fn [z]
-                        ((f4 (fn [x] x)) z)))))))
+                      (fn [z] ((f4 (fn [x] x)) z)))))))
             (fn [x]
               (fn [y]
                 (fn [x']
@@ -232,8 +244,174 @@
                       (fn [y]
                         (fn [x']
                           (fn [y']
+                            ;return 1
                             1))))))))))))
+  ; exponential growth in size of printed type
+  (is
+    (= (read-string (slurp "huge_type.edn"))
+       (tc ?
+           ((let [pair (fn [x] ; original f and x ordering
+                         (fn [f]
+                           ((f x) x)))]
+              (let [f1 (fn [x] (pair x))]
+                (let [f2 (fn [x] (f1 (f1 x)))]
+                  (let [f3 (fn [x] (f2 (f2 x)))]
+                    (let [f4 (fn [x] (f3 (f3 x)))]
+                      (fn [z] ((f4 (fn [x] x)) z)))))))
+            (fn [x]
+              (fn [y]
+                (fn [x']
+                  (fn [y']
+                    (fn [x]
+                      (fn [y]
+                        (fn [x']
+                          (fn [y']
+                            ;return id
+                            (fn [i] i)))))))))))))
+  ; add expected type to the expression above, and the huge type goes away.
+  ; Challenge: how to suggest user what to write and where to get rid of exponential printed type size
+  ; Also: what is the type of the operator here? Needs more investigation
+  (is
+    (= '[Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]
+       (tc [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]
+           ((let [pair (fn [x] ; original f and x ordering
+                         (fn [f]
+                           ((f x) x)))]
+              (let [f1 (fn [x] (pair x))]
+                (let [f2 (fn [x] (f1 (f1 x)))]
+                  (let [f3 (fn [x] (f2 (f2 x)))]
+                    (let [f4 (fn [x] (f3 (f3 x)))]
+                      (fn [z] ((f4 (fn [x] x)) z)))))))
+            (fn [x]
+              (fn [y]
+                (fn [x']
+                  (fn [y']
+                    (fn [x]
+                      (fn [y]
+                        (fn [x']
+                          (fn [y']
+                            ;return id
+                            (fn [i] i)))))))))))))
+; TODO another terrible error message
+#_
+  (is
+     (tc [[Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+          :->
+          [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]
+         (let [pair (fn [x]
+                       (fn [f]
+                         ((f x) x)))]
+            (let [f1 (fn [x] (pair x))]
+              (let [f2 (fn [x] (f1 (f1 x)))]
+                (let [f3 (fn [x] (f2 (f2 x)))]
+                  (let [f4 (fn [x] (f3 (f3 x)))]
+                    (fn [z] ((f4 (fn [x] x)) z)))))))))
+  ; pair
+  (is (= '(All [a b c]
+               [a b :-> [[a b :-> c] :-> c]])
+         (tc (All [a b c]
+                  [a b :-> [[a b :-> c] :-> c]])
+             (fn [x y]
+               (fn [z]
+                 (z x y))))))
+  (is (= '(All [a b c]
+               [a b :-> [[a b :-> c] :-> c]])
+         (tc ?
+             (let [pair (ann (fn [x y]
+                               (fn [z]
+                                 (z x y)))
+                             (All [a b c]
+                                  [a b :-> [[a b :-> c] :-> c]]))]
+               pair))))
+  ; pair+f1
+; FIXME good example of a terrible error message
+;  (is
+;    (= '[[[Int :-> Int] :-> Int]
+;         :-> Int]
+;       (tc [[[Int :-> Int] :-> Int]
+;            :-> Int]
+;           (let [pair (ann (fn [x y]
+;                             (fn [z]
+;                               (z x y)))
+;                           (All [a b c]
+;                             [a b :-> [[a b :-> c] :-> c]]))]
+;             (let [f1 (fn [x] (pair x))]
+;               (fn [z] ((f1 (fn [x] x)) z)))))))
 
+  ; inferring pair+f1
+  (is
+    (= '(All [[a :lower (Closure {pair (All [a b c]
+                                         [a b :-> [[a b :-> c] :-> c]]),
+                                  x1 (Closure {pair (All [a b c] [a b :-> [[a b :-> c] :-> c]])}
+                                              (fn [y] (pair y y)))}
+                                 (fn [x] x))]
+              [b :lower (Closure {pair (All [a b c]
+                                         [a b :-> [[a b :-> c] :-> c]]),
+                                  x1 (Closure {pair (All [a b c] [a b :-> [[a b :-> c] :-> c]])}
+                                              (fn [y] (pair y y)))}
+                                 (fn [x] x))]
+              c]
+             [[a b :-> c] :-> c])
+       (tc ?
+           (let [pair (ann (fn [x y]
+                             (fn [z]
+                               (z x y)))
+                           (All [a b c]
+                                [a b :-> [[a b :-> c] :-> c]]))]
+             (let [x1 (fn [y] (pair y y))]
+               (x1 (fn [x] x)))))))
+  ; evaluating pair+f1
+  (is
+    ((let [pair (ann (fn [x y]
+                       (fn [z]
+                         (z x y)))
+                     (All [a b c]
+                          [a b :-> [[a b :-> c] :-> c]]))]
+       (let [x1 (fn [y] (pair y y))]
+         (x1 (fn [x] x))))
+     (fn [x y]
+       (prn "(x 1)" (x 1))
+       (prn "(y 1)" (y 1))
+       x)))
+;; attempting to annotate pair+f1
+#_
+  (is
+    (tc [[[Int :-> Int] [Int :-> Int] :-> [Int :-> Int]] :-> [Int :-> Int]]
+        (let [pair (ann (fn [x y]
+                          (fn [z]
+                            (z x y)))
+                        (All [a b c]
+                             [a b :-> [[a b :-> c] :-> c]]))]
+          (let [x1 (fn [y] (pair y y))]
+            (x1 (fn [x] x))))))
+;; checking an applied pair+f1
+;FIXME BUG! this type checks as Nothing!
+#_
+  (is
+    (not= 'Nothing
+          (tc ?
+              ((let [pair (ann (fn [x y]
+                                 (fn [z]
+                                   (z x y)))
+                               (All [a b c]
+                                    [a b :-> [[a b :-> c] :-> c]]))]
+                 (let [x1 (fn [y] (pair y y))]
+                   (x1 (fn [x] x))))
+               (fn [x y]
+                 x)))))
+
+  ; f1 + f2
+  (is
+    (= '[[[Int :-> Int] :-> Int]
+         :-> Int]
+       (tc [[[Int :-> Int] :-> Int]
+            :-> Int]
+           (let [pair (fn [f]
+                        (fn [x]
+                          ((f x) x)))]
+             (let [f1 (fn [x] (pair x))]
+               (let [f2 (fn [x] (f1 (f1 x)))]
+                 (fn [z] ((f2 (fn [x] x)) z))))))))
   (is (tc-err ?
               (let [f (ann id (All [a b] [a :-> b]))]
                 (f 1))))
@@ -393,6 +571,13 @@
                          (fn [g] (fn [x] (f (g g) x)))))]
                 (let [compute (Y (fn [f x] (+ 1 (f x))))]
                   (compute 1)))))
+  (is (tc ?
+            (let [Y (fn [f]
+                      ((fn [g] (fn [x] (f (g g) x)))
+                       (fn [g] (fn [x] (f (g g) x)))))]
+              (let [compute (Y (ann (fn [f x] (+ 1 (f x)))
+                                    [[Int :-> Int] Int :-> Int]))]
+                (compute 1)))))
   )
 
 (deftest polymorphic-upcast

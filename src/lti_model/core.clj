@@ -503,6 +503,7 @@
                            (fv-variances body))
                          gs-names))
         sbt (substitution-for-variances gs-variances bounds)]
+    (assert nil "TODO")
     ))
 
 (defn base-supers [t]
@@ -1318,7 +1319,13 @@
                                                                   :dom ddom
                                                                   :rng rng)))
                                                        (:methods P))}
-                              ;; TODO Poly
+                              ; TODO unit tests for polymorphically annotated fn's
+                              (Poly? P) (let [gs (Poly-frees P)
+                                              gs-names (mapv :name gs)
+                                              t (Poly-body P gs)
+                                              ct (check t env e)]
+                                          (Poly* gs-names ct
+                                                 :original-names (mapv :original-name gs)))
                               (= -any P) -any
                               :else (throw (ex-info (str "Function does not match expected type:"
                                                          "\nExpected:\n\t" (unparse-type P)
