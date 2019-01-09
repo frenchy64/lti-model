@@ -1223,7 +1223,20 @@
   (str "\n=== Symbolic Closure report ===\n"
        "\tReductions: " (or reduction-count 0) "\n"
        "\tDistinct expecteds: " (count expecteds) "\n"
-       "\tDistinct actual rngs: " (count actual-rngs)))
+       "\tDistinct actual rngs: " (count (apply set/union (vals actual-rngs)))
+       (when (= (count expecteds) 1)
+         (let [{:keys [args] :as expected} (key (first expecteds))
+               actuals (get actual-rngs expected)]
+           (str "\n\tSuggested argument annotations:\n"
+                (binding [*print-level* 10
+                          *print-length* 10]
+                  (apply str (mapv (fn [t] (str "\t\t" (prn-str (unparse-type t)))) args)))
+                (when (= (count actuals) 1)
+                  (let [rng (first actuals)]
+                    (str "\n\tSuggested return annotation:\n"
+                         (binding [*print-level* 10
+                                   *print-length* 10]
+                           (str "\t\t" (prn-str (unparse-type rng))))))))))))
 
 (defn solve-app [P cop cargs]
   ;(prn "solve-app" (:op cop))
