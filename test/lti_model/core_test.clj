@@ -614,6 +614,30 @@
              (let [x9 #(x8 (x8 %))]
              (let [x10 #(x9 (x9 %))]
                (x10 1))))))))))))))
+  ;hit global checking limit
+  (is
+    (binding [*reduction-limit* nil]
+     (tc-err ?
+         (let [pair (fn [x y]
+                      (fn [z]
+                        (z x y)))
+               fst (fn [p]
+                     (p (fn [x y]
+                          x)))
+               snd (fn [p]
+                     (p (fn [x y]
+                          y)))]
+           (let [x1 #(pair % %)]
+             (let [x2 #(x1 (x1 %))]
+             (let [x3 #(x2 (x2 %))]
+             (let [x4 #(x3 (x3 %))]
+             (let [x5 #(x4 (x4 %))]
+             (let [x6 #(x5 (x5 %))]
+             (let [x7 #(x6 (x6 %))]
+             (let [x8 #(x7 (x7 %))]
+             (let [x9 #(x8 (x8 %))]
+             (let [x10 #(x9 (x9 %))]
+               (x10 1)))))))))))))))
 ;Notes on lambda encoding of pairs
 ;           (let [; a Pair is [Int :-> [Int :-> Int]]
 ;                 ; [Int :-> [Int :-> Pair]]

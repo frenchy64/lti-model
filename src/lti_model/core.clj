@@ -1214,6 +1214,9 @@
                   smret)))))))))
 
 (def ^:dynamic *closure-cache* nil)
+(def ^:dynamic *reduction-limit* 20)
+(def ^:dynamic *global-reduction-counter* nil)
+(def ^:dynamic *global-reduction-limit* 100)
 
 (defn solve-app [P cop cargs]
   ;(prn "solve-app" (:op cop))
@@ -1230,16 +1233,28 @@
     :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
                           {::type-error true}))
     :Closure (let [_ (assert *closure-cache*)
-                   _ (when *closure-cache*
-                       (swap! *closure-cache* update cop
+                   _ (some-> *closure-cache*
+                       (swap! update cop
                               (fn [i]
                                 (let [i ((fnil inc 0) i)]
-                                  (if (< 20 i)
+                                  (if (some-> *reduction-limit*
+                                              (< i))
                                     (throw (ex-info (str "Exceeded 'fn' checking limit, consider annotating: " (:expr cop)
                                                          ;"\n" (mapv unparse-type cargs)
                                                          )
                                                     {::type-error true}))
                                     i)))))
+                   _ (some-> *global-reduction-counter*
+                             (swap! (fn [i]
+                                      (let [i (inc i)]
+                                        (if (some-> *global-reduction-limit*
+                                                    (< i))
+                                          (throw (ex-info (str "Exceeded 'fn' global checking limit, consider annotating: " (:expr cop)
+                                                               ;"\n" (mapv unparse-type cargs)
+                                                               )
+                                                          {::type-error true}))
+                                          i)))))
+
                    ifn (check {:op :IFn
                                :methods [{:op :Fn
                                           :dom cargs
@@ -1278,7 +1293,8 @@
 (declare check)
 
 (defn check-form [P env e]
-  (binding [*closure-cache* (atom {})]
+  (binding [*closure-cache* (atom {})
+            *global-reduction-counter* (atom 0)]
     (check P env e)))
 
 #_
