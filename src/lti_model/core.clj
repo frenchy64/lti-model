@@ -148,6 +148,31 @@
           t
           (rseq syms)))
 
+(defn walk-type [f t]
+  (let [wlk #(f %)]
+    (case (:op t)
+      (:Wild :F :Base :B :Closure) t
+      :Union (make-U (map wlk (:types t)))
+      :Intersection (make-I (map wlk (:types t)))
+      :Seq (update t :type wlk)
+      :Poly (-> t
+                (update :type wlk)
+                (update :constraints (fn [cs]
+                                       (mapv #(-> %
+                                                  (update :lower wlk)
+                                                  (update :upper wlk))
+                                             cs)))
+                (update :bounds (fn [bs]
+                                  (mapv #(-> %
+                                             (update :lower wlk)
+                                             (update :upper wlk))
+                                        bs))))
+      :Fn (-> t
+              (update :dom #(mapv wlk %))
+              (update :rng wlk))
+      :IFn (update t :methods #(mapv wlk %))
+      :Scope (update t :scope wlk))))
+
 ; Expr Scope -> Expr
 (defn instantiate [image t]
   {:pre [(= :Scope (:op t))
@@ -553,6 +578,10 @@
       (when-let [s (base-supers s)]
         (subtype? (make-U s) t)))
 
+    ; This case is pretty weird because it can trigger side effects
+    ; in the *closure-cache* that might end up being irrelevant.
+    ; Perhaps the Closure is called with a wrong number of arguments,
+    ; and then we suggest an annotation with the wrong number of args.
     (Closure? s) (boolean (check t (:env s) (:expr s)))
     :else false))
 
@@ -1218,25 +1247,81 @@
 (def ^:dynamic *global-reduction-counter* nil)
 (def ^:dynamic *global-reduction-limit* 100)
 
-(defn closure-report [{:keys [reduction-count expecteds actual-rngs] :as entry} cop]
+(declare suggest-annotation)
+
+(def ^:dynamic *currently-suggesting-closures* #{})
+
+; The :Closure case in `subtype?` might cause irrelevant side effects
+; to the closure-cache, so it might cause us to give bad suggestions sometimes.
+; Of course, the type system will catch the errors if the users take our advice
+; and actually use our suggested annotations.
+(defn suggested-annotation-for-closure [closure-cache cop]
+  {:pre [(Closure? cop)]
+   :post [((some-fn nil? map?) %)]}
+  (let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
+    (if (contains? *currently-suggesting-closures* cop)
+      -any ; probably in an infinite loop
+      (binding [*currently-suggesting-closures* (conj *currently-suggesting-closures* cop)]
+        (cond
+          ; likely this is a good annotation for arguments
+          (= (count expecteds) 1)
+          (let [{:keys [args] :as expected} (key (first expecteds))
+                actuals (get actual-rngs expected)
+                rng (if (= (count actuals) 1)
+                      (first actuals)
+                      -any)]
+              (suggest-annotation
+                closure-cache
+                {:op :IFn
+                 :methods [{:op :Fn
+                            :dom args
+                            :rng rng}]}))
+          
+          ; if argument count is always the same, just suggest a [Any_0 Any_1 ... Any_n :-> Any]
+          ; annotation
+          (and (seq expecteds)
+               (apply = (map (comp count :args) (keys expecteds))))
+          {:op :IFn
+           :methods [{:op :Fn
+                      :dom (repeat (-> expecteds keys first :args count) -any)
+                      :rng -any}]}
+
+          ;otherwise we have no idea. maybe `?` is better here.
+          :else -any)))))
+
+(defn suggest-annotation [closure-cache t]
+  (let [sg #(suggest-annotation closure-cache %)]
+    (case (:op t)
+      ;TODO :F
+      :Closure (suggested-annotation-for-closure closure-cache t)
+      (walk-type sg t))))
+
+(defn closure-report [closure-cache cop]
   {:pre [(Closure? cop)]}
-  (str "\n=== Symbolic Closure report ===\n"
-       "\tReductions: " (or reduction-count 0) "\n"
-       "\tDistinct expecteds: " (count expecteds) "\n"
-       "\tDistinct actual rngs: " (count (apply set/union (vals actual-rngs)))
-       (when (= (count expecteds) 1)
-         (let [{:keys [args] :as expected} (key (first expecteds))
-               actuals (get actual-rngs expected)]
-           (str "\n\tSuggested argument annotations:\n"
-                (binding [*print-level* 10
-                          *print-length* 10]
-                  (apply str (mapv (fn [t] (str "\t\t" (prn-str (unparse-type t)))) args)))
-                (when (= (count actuals) 1)
-                  (let [rng (first actuals)]
-                    (str "\n\tSuggested return annotation:\n"
-                         (binding [*print-level* 10
-                                   *print-length* 10]
-                           (str "\t\t" (prn-str (unparse-type rng))))))))))))
+  ; if a local function happens to have equivalent source and environment,
+  ; their reports will probably be conflated
+  (let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
+    (assert entry)
+    (str "\n=== Symbolic Closure report ===\n"
+         "\tReductions: " (or reduction-count 0) "\n"
+         "\tDistinct expecteds: " (count expecteds) "\n"
+         "\tDistinct actual rngs: " (count (apply set/union (vals actual-rngs)))
+         (when (= (count expecteds) 1)
+           (let [{:keys [args] :as expected} (key (first expecteds))
+                 actuals (get actual-rngs expected)]
+             (str "\n\tSuggested argument annotations:\n"
+                  (binding [*print-level* 10
+                            *print-length* 10]
+                    (apply str (mapv (fn [t]
+                                       (let [t (suggest-annotation closure-cache t)]
+                                         (str "\t\t" (prn-str (unparse-type t)))))
+                                     args)))
+                  (when (= (count actuals) 1)
+                    (let [rng (suggest-annotation closure-cache (first actuals))]
+                      (str "\n\tSuggested return annotation:\n"
+                           (binding [*print-level* 10
+                                     *print-length* 10]
+                             (str "\t\t" (prn-str (unparse-type rng)))))))))))))
 
 (defn solve-app [P cop cargs]
   ;(prn "solve-app" (:op cop))
@@ -1254,27 +1339,27 @@
                           {::type-error true}))
     :Closure (let [_ (assert *closure-cache*)
                    _ (some-> *closure-cache*
-                       (swap! update cop
-                              (fn [{i :reduction-count :as m}]
-                                (let [i ((fnil inc 0) i)]
-                                  (if (some-> *reduction-limit*
-                                              (< i))
-                                    (throw (ex-info (str "Exceeded 'fn' checking limit, consider annotating: " (:expr cop)
-                                                         (closure-report m cop)
-                                                         ;"\n" (mapv unparse-type cargs)
-                                                         )
-                                                    {::type-error true}))
-                                    (-> m
-                                        (assoc :reduction-count i)
-                                        (update :expecteds update {:args cargs :ret P} (fnil inc 0))))))))
+                       (swap! (fn [closure-cache]
+                                (update closure-cache cop
+                                  (fn [{i :reduction-count :as m}]
+                                    (let [i ((fnil inc 0) i)]
+                                      (if (some-> *reduction-limit*
+                                                  (< i))
+                                        (throw (ex-info (str "Exceeded 'fn' checking limit, consider annotating: " (:expr cop)
+                                                             (closure-report closure-cache cop)
+                                                             ;"\n" (mapv unparse-type cargs)
+                                                             )
+                                                        {::type-error true}))
+                                        (-> m
+                                            (assoc :reduction-count i)
+                                            (update :expecteds update {:args cargs :ret P} (fnil inc 0))))))))))
                    _ (some-> *global-reduction-counter*
                              (swap! (fn [i]
                                       (let [i (inc i)]
                                         (if (some-> *global-reduction-limit*
                                                     (< i))
                                           (throw (ex-info (str "Exceeded 'fn' global checking limit, consider annotating: " (:expr cop)
-                                                               (some-> *closure-cache* deref (get cop)
-                                                                       (closure-report cop))
+                                                               (some-> *closure-cache* deref (closure-report cop))
                                                                ;"\n" (mapv unparse-type cargs)
                                                                )
                                                           {::type-error true}))
@@ -1350,7 +1435,7 @@
                            _ (when more
                                (throw (ex-info (str "Extra arguments to 'ann': " more)
                                                {::type-error true})))
-                           _ (assert (= 2 (count args)))
+                           _ (assert (= 2 (count args)) "Not enough arguments to 'ann'")
                            t (check (parse-type at) env e')
                            m (smallest-matching-super t P)]
                        ;(prn "ann")
@@ -1371,6 +1456,7 @@
                          _ (when more
                              (throw (ex-info (str "Extra arguments to 'fn': " more)
                                              {::type-error true})))
+                           _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
                           t (cond
                               (= -wild P) {:op :Closure
                                            :env env

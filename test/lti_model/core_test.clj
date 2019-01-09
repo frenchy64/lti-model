@@ -937,6 +937,41 @@
                   (compute 1)))))
   )
 
+(deftest closure-suggestions
+  ; suggests Int -> Int
+  (is (binding [*reduction-limit* 5]
+        (tc-err ?
+                (let [f (fn [x] x)]
+                  (f (f (f (f (f (f 1))))))))))
+  ; suggestion with 1 level of nested Closures
+  (is (binding [*reduction-limit* 5]
+        (tc-err ?
+                (let [g (fn [x] x)]
+                (let [f (fn [g x] (g x))]
+                  (f g (f g (f g (f g (f g (f g 1)))))))))))
+  ; suggestion with 2 levels of nested Closures
+  (is (binding [*reduction-limit* 5]
+        (tc-err ?
+                (let [h (fn [x] x)]
+                (let [g (fn [h x] (h x))]
+                (let [f (fn [g x] (g h x))]
+                  (f g (f g (f g (f g (f g (f g 1))))))))))))
+  ; suggestion with 3 levels of nested Closures
+  (is (binding [*reduction-limit* 5]
+        (tc-err ?
+                (let [i (fn [x] x)]
+                (let [h (fn [i x] (i x))]
+                (let [g (fn [h x] (h i x))]
+                (let [f (fn [g x] (g h x))]
+                  (f g (f g (f g (f g (f g (f g 1)))))))))))))
+  ; suggestion with unexercised Closures
+  (is (binding [*global-reduction-limit* 2]
+        (tc-err ?
+                (let [j (fn [x] x)
+                      i (fn [j x] x)]
+                  (i j (i j 1))))))
+  )
+
 (deftest polymorphic-upcast
   (is (= '(All [b a] [[a :-> b] a :-> b])
          (tc (All [b a] [[a :-> b] a :-> b])
