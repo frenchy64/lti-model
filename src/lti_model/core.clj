@@ -1286,13 +1286,13 @@
                       :dom (repeat (-> expecteds keys first :args count) -any)
                       :rng -any}]}
 
-          ;otherwise we have no idea. maybe `?` is better here.
+          ;otherwise we have no idea. maybe `?` is better here, but users can't write `?`.
           :else -any)))))
 
 (defn suggest-annotation [closure-cache t]
   (let [sg #(suggest-annotation closure-cache %)]
     (case (:op t)
-      ;TODO :F
+      ;TODO handle free type variables, do they imply a polymorphic annotation, or perhaps just upcast to Any?
       :Closure (suggested-annotation-for-closure closure-cache t)
       (walk-type sg t))))
 
@@ -1300,8 +1300,7 @@
   {:pre [(Closure? cop)]}
   ; if a local function happens to have equivalent source and environment,
   ; their reports will probably be conflated
-  (let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
-    (assert entry)
+  (when-let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
     (str "\n=== Symbolic Closure report ===\n"
          "\tReductions: " (or reduction-count 0) "\n"
          "\tDistinct expecteds: " (count expecteds) "\n"
