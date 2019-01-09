@@ -943,12 +943,24 @@
         (tc-err ?
                 (let [f (fn [x] x)]
                   (f (f (f (f (f (f 1))))))))))
+  ; following the suggestion fixes the problem
+  (is (binding [*reduction-limit* 5]
+        (tc ?
+            (let [f (ann (fn [x] x) [Int :-> Int])]
+              (f (f (f (f (f (f 1))))))))))
   ; suggestion with 1 level of nested Closures
   (is (binding [*reduction-limit* 5]
         (tc-err ?
                 (let [g (fn [x] x)]
                 (let [f (fn [g x] (g x))]
                   (f g (f g (f g (f g (f g (f g 1)))))))))))
+  ; following the suggestion fixes the problem
+  (is (binding [*reduction-limit* 5]
+        (tc ?
+            (let [g (fn [x] x)]
+              (let [f (ann (fn [g x] (g x))
+                           [[Int :-> Int] Int :-> Int])]
+                (f g (f g (f g (f g (f g (f g 1)))))))))))
   ; suggestion with 2 levels of nested Closures
   (is (binding [*reduction-limit* 5]
         (tc-err ?
