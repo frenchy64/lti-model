@@ -616,7 +616,8 @@
                (x10 1))))))))))))))
   ;hit global checking limit
   (is
-    (binding [*reduction-limit* nil]
+    (binding [*reduction-limit* nil
+              *global-reduction-limit* 1000]
      (tc-err ?
          (let [pair (fn [x y]
                       (fn [z]

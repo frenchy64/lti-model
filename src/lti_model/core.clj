@@ -1218,6 +1218,13 @@
 (def ^:dynamic *global-reduction-counter* nil)
 (def ^:dynamic *global-reduction-limit* 100)
 
+(defn closure-report [{:keys [reduction-count expecteds actual-rngs] :as entry} cop]
+  {:pre [(Closure? cop)]}
+  (str "\n=== Symbolic Closure report ===\n"
+       "\tReductions: " (or reduction-count 0) "\n"
+       "\tDistinct expecteds: " (count expecteds) "\n"
+       "\tDistinct actual rngs: " (count actual-rngs)))
+
 (defn solve-app [P cop cargs]
   ;(prn "solve-app" (:op cop))
   ;(prn "cop" (unparse-type cop))
@@ -1235,21 +1242,26 @@
     :Closure (let [_ (assert *closure-cache*)
                    _ (some-> *closure-cache*
                        (swap! update cop
-                              (fn [i]
+                              (fn [{i :reduction-count :as m}]
                                 (let [i ((fnil inc 0) i)]
                                   (if (some-> *reduction-limit*
                                               (< i))
                                     (throw (ex-info (str "Exceeded 'fn' checking limit, consider annotating: " (:expr cop)
+                                                         (closure-report m cop)
                                                          ;"\n" (mapv unparse-type cargs)
                                                          )
                                                     {::type-error true}))
-                                    i)))))
+                                    (-> m
+                                        (assoc :reduction-count i)
+                                        (update :expecteds update {:args cargs :ret P} (fnil inc 0))))))))
                    _ (some-> *global-reduction-counter*
                              (swap! (fn [i]
                                       (let [i (inc i)]
                                         (if (some-> *global-reduction-limit*
                                                     (< i))
                                           (throw (ex-info (str "Exceeded 'fn' global checking limit, consider annotating: " (:expr cop)
+                                                               (some-> *closure-cache* deref (get cop)
+                                                                       (closure-report cop))
                                                                ;"\n" (mapv unparse-type cargs)
                                                                )
                                                           {::type-error true}))
@@ -1263,8 +1275,13 @@
                               (:expr cop))
                    _ (assert (and (IFn? ifn)
                                   (= 1 (count (:methods ifn)))))
-                   m (first (:methods ifn))]
-               (:rng m))
+                   m (first (:methods ifn))
+                   actual-rng (:rng m)
+                   _ (some-> *closure-cache*
+                       (swap! update-in [cop :actual-rngs {:args cargs :ret P}]
+                              (fn [actual-rngs]
+                                (conj (or actual-rngs #{}) actual-rng))))]
+               actual-rng)
     :IFn (some (fn [m]
                  {:pre [(Fn? m)]}
                  (when (= (count cargs)
