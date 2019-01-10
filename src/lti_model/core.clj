@@ -1420,7 +1420,7 @@
   (cond
     (symbol? e) (let [t (or (get env e)
                             (constant-type e)
-                            (assert nil (str "Bad symbol" e)))
+                            (assert nil (str "Bad symbol " e)))
                       m (smallest-matching-super t P)]
                   (check-match t P m e))
     (vector? e) (let [t {:op :Seq

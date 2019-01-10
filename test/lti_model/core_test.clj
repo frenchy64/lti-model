@@ -1,6 +1,7 @@
 (ns lti-model.core-test
   (:require [clojure.test :refer :all]
             [clojure.pprint :refer [pprint]]
+            [clojure.walk :as walk]
             [lti-model.core :refer :all :as lti]))
 
 (defmacro tc [P e]
@@ -983,6 +984,213 @@
                       i (fn [j x] x)]
                   (i j (i j 1))))))
   )
+
+(defn symbol-count [d]
+  (let [a (atom 0)]
+    (walk/postwalk
+      #(when (symbol? %)
+         (swap! a inc))
+      d)
+    @a))
+
+;from Kanellakis & Mitchell [POPL 1989]
+; Example 3.1 - composing (lambda encoded) pairs, let-free
+; Observation here:
+; - symbolic closure types grow linearly
+;   - actually, their environments grow linearly
+(deftest kami89-3.1
+  (is
+    (symbol-count
+      (tc ?
+          (fn [x]
+            (fn [z]
+              (z x x))))))
+  (is (symbol-count
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              P))))
+  (is (symbol-count
+        (tc ?
+            (let [comp (fn [f g]
+                         (fn [x]
+                           (f (g x))))]
+              (let [P (fn [x]
+                         (fn [z]
+                           (z x x)))]
+                (comp P P))))))
+  (is (symbol-count
+        (tc ?
+            (let [comp (fn [f g]
+                         (fn [x]
+                           (f (g x))))]
+              (let [P (fn [x]
+                         (fn [z]
+                           (z x x)))]
+                (comp (comp P P) P))))))
+  (is (symbol-count
+        (tc ?
+            (let [comp (fn [f g]
+                         (fn [x]
+                           (f (g x))))]
+              (let [P (fn [x]
+                         (fn [z]
+                           (z x x)))]
+                (comp (comp (comp P P) P) P))))))
+  (is (symbol-count
+        (tc ?
+            (let [comp (fn [f g]
+                         (fn [x]
+                           (f (g x))))]
+              (let [P (fn [x]
+                         (fn [z]
+                           (z x x)))]
+                (comp (comp (comp (comp P P) P) P) P))))))
+  )
+
+;from Kanellakis & Mitchell [POPL 1989]
+; Example 3.4 - composing (lambda encoded) pairs using let
+; Observation here:
+; - linear increase in type size from nested symbolic closure environments
+; - constant size of symbolic closure's expression: (fn [z] (z x x))
+(deftest kami89-3.4
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x0 (fn [x] x)]
+                x0)))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x0 (fn [x] x)]
+                (let [x1 (P x0)]
+                  x1))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x0 (fn [x] x)]
+                (let [x1 (P x0)]
+                  (let [x2 (P x1)]
+                    x2)))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x0 (fn [x] x)]
+                (let [x1 (P x0)]
+                  (let [x2 (P x1)]
+                    (let [x3 (P x2)]
+                      x3))))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x0 (fn [x] x)]
+                (let [x1 (P x0)]
+                  (let [x2 (P x1)]
+                    (let [x3 (P x2)]
+                      (let [x4 (P x3)]
+                        x4)))))))))
+  )
+
+;from Kanellakis & Mitchell [POPL 1989]
+; Example 3.5 - composing (lambda encoded) pairs using let
+; Observation here:
+; - exponential increase in type size!
+;   - nested symbolic closure environments are increasing
+;   - however, the closure's expression is constant (the return of P)
+;     - (fn [z] (z x x))
+; - note that the printed types are _doubly_ exponential in ML
+;   - symbolic closure environments seem to give us a DAG for free
+;     (eliminating one level of exponential?)
+;   - eg., the type of (let [P (fn [x] (fn [z] (z x x)))] (P (fn [y] y)))
+;     - in ML:
+;       ((('a -> 'a) -> ('a -> 'a) -> 'b) -> 'b)
+;     - symbolic closures:
+;       (Closure {x (Closure {P (Closure {} (fn [x] (fn [z] (z x x))))}
+;                            (fn [y] y))}
+;                (fn [z] (z x x)))
+;       - note that `x` is already abbreviated!
+;         - like the following ML type:
+;           ((W -> W -> 'b) -> 'b)
+;           where W = ('a -> 'a)
+; - seems clear that symbolic closure environments should rarely
+;   be displayed to the user
+(deftest kami89-3.5
+  ;some tests for the above notes
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (P (fn [y] y))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (P (P (fn [y] y)))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (P (P (P (fn [y] y))))))))
+  ; example 3.5 starts here
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x1 (fn [x] (P x))]
+                (x1 (fn [x] x)))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x1 (fn [x'] (P x'))]
+                (let [x2 (fn [y] (x1 (x1 y)))]
+                  (x2 (fn [i] i))))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x1 (fn [x] (P x))]
+                (let [x2 (fn [y] (x1 (x1 y)))]
+                  (let [x3 (fn [y] (x2 (x2 y)))]
+                    (x3 (fn [x] x)))))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x1 (fn [x] (P x))]
+                (let [x2 (fn [y] (x1 (x1 y)))]
+                  (let [x3 (fn [y] (x2 (x2 y)))]
+                    (let [x4 (fn [y] (x3 (x3 y)))]
+                      (x4 (fn [x] x))))))))))
+  (is ((juxt last symbol-count)
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (let [x1 (fn [x] (P x))]
+                (let [x2 (fn [y] (x1 (x1 y)))]
+                  (let [x3 (fn [y] (x2 (x2 y)))]
+                    (let [x4 (fn [y] (x3 (x3 y)))]
+                      (let [x5 (fn [y] (x4 (x4 y)))]
+                        (x5 (fn [x] x))))))))))))
 
 (deftest polymorphic-upcast
   (is (= '(All [b a] [[a :-> b] a :-> b])
