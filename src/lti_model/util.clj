@@ -162,3 +162,17 @@
                     :IFn (update t :methods rpv)
                     :Scope (update t :scope #(replace (inc outer) %))))))]
     (replace 0 (:scope t))))
+
+; (Seqable T) Scope [T Scope -> T] -> T
+(defn instantiate-all-by [images t ins]
+  (reduce (fn [t image]
+            (ins image t))
+          t
+          images))
+
+; Poly (Seqable Type) [(Seqable T) Scope -> T] -> Type
+(defn Poly-body-by [p images instantiate-all-fn]
+  {:pre [(= :Poly (:op p))
+         (= (count images) (count (:syms p)))]
+   :post [(:op %)]}
+  (instantiate-all-fn images (:type p)))

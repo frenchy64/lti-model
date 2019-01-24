@@ -131,18 +131,13 @@
                         (:Wild :Closure) t
                         nil))))
 
+; (Seqable T) Scope -> T
 (defn instantiate-all [images t]
-  (reduce (fn [t image]
-            (instantiate image t))
-          t
-          images))
+  (u/instantiate-all-by images t instantiate))
 
 ; Poly (Seqable Type) -> Type
 (defn Poly-body [p images]
-  {:pre [(= :Poly (:op p))
-         (= (count images) (count (:syms p)))]
-   :post [(:op %)]}
-  (instantiate-all images (:type p)))
+  (u/Poly-body-by p images instantiate-all))
 
 (defn Poly-constraints [p images]
   {:pre [(= :Poly (:op p))
