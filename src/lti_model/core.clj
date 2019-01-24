@@ -179,13 +179,16 @@
 
 ; T -> Any
 (defn unparse-type [t]
-  (u/unparse-type-by t 
-                     {:Poly-frees Poly-frees
-                      :Poly-body Poly-body
-                      :Poly-constraints Poly-constraints
-                      :unparse-env unparse-env
-                      :Poly-bounds Poly-bounds
-                      :unparse-type unparse-type}))
+  (case (:op t)
+    :Wild '?
+    :Closure (list 'Closure (unparse-env (:env t)) (:expr t))
+    (u/unparse-type-by t 
+                       {:Poly-frees Poly-frees
+                        :Poly-body Poly-body
+                        :Poly-constraints Poly-constraints
+                        :unparse-env unparse-env
+                        :Poly-bounds Poly-bounds
+                        :unparse-type unparse-type})))
 
 (defn variance? [v]
   (contains? #{:covariant :contravariant :invariant} v))

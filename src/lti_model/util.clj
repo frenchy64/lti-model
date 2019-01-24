@@ -254,7 +254,7 @@
                                  Poly-bounds
                                  unparse-type]}]
   (case (:op t)
-    :Wild '?
+    ; TODO move out the constraint/bounds logic
     :Poly (let [gs (Poly-frees t)
                 body (unparse-type (Poly-body t gs))
                 constraints (mapv (fn [{:keys [lower upper]}]
@@ -289,7 +289,6 @@
     :Intersection (if (empty? (:types t))
                     'Any
                     (list* 'I (mapv unparse-type (:types t))))
-    :Closure (list 'Closure (unparse-env (:env t)) (:expr t))
     :Seq (list 'Seq (unparse-type (:type t)))
     :Base (:name t)
     :Fn (let [dom (mapv unparse-type (:dom t))
