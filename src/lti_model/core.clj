@@ -109,6 +109,7 @@
                      (:Wild :Closure) t
                      nil))))
 
+; (Vec Name) T -> Scope
 (defn abstract-all [syms t]
   (u/abstract-all-by syms t abstract))
 
@@ -159,37 +160,8 @@
 
 (declare parse-type)
 
-; (Seqable Sym) Type -> Poly
-(defn Poly* [syms t & {:keys [constraints original-names bounds]}]
-  {:pre [(every? symbol? syms)
-         (apply distinct? syms)
-         (vector? syms)
-         (:op t)
-         (or (nil? original-names)
-             (and (= (count syms) (count original-names))
-                  (every? symbol? original-names)
-                  (apply distinct? original-names)))
-         (or (nil? bounds)
-             (= (count syms) (count bounds)))
-         ]}
-  (let [ab (abstract-all syms t)
-        constraints (mapv (fn [c]
-                            (-> c
-                                (select-keys [:lower :upper])
-                                (update :lower #(abstract-all syms %))
-                                (update :upper #(abstract-all syms %))))
-                          constraints)
-        bounds (mapv (fn [b]
-                       (-> b
-                           (update :lower #(abstract-all syms %))
-                           (update :upper #(abstract-all syms %))))
-                     (or bounds
-                         (repeat (count syms) {:lower -nothing :upper -any})))]
-    {:op :Poly
-     :syms (or original-names (vec syms))
-     :bounds bounds
-     :constraints constraints
-     :type ab}))
+(defn Poly* [syms t & args]
+  (apply u/Poly*-by syms t abstract-all args))
 
 ; Any -> T
 (defn parse-type [t]

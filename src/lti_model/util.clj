@@ -176,3 +176,35 @@
          (= (count images) (count (:syms p)))]
    :post [(:op %)]}
   (instantiate-all-fn images (:type p)))
+
+; (Seqable Sym) Type -> Poly
+(defn Poly*-by [syms t abstract-all-fn & {:keys [constraints original-names bounds]}]
+  {:pre [(every? symbol? syms)
+         (apply distinct? syms)
+         (vector? syms)
+         (:op t)
+         (or (nil? original-names)
+             (and (= (count syms) (count original-names))
+                  (every? symbol? original-names)
+                  (apply distinct? original-names)))
+         (or (nil? bounds)
+             (= (count syms) (count bounds)))
+         ]}
+  (let [ab (abstract-all-fn syms t)
+        constraints (mapv (fn [c]
+                            (-> c
+                                (select-keys [:lower :upper])
+                                (update :lower #(abstract-all-fn syms %))
+                                (update :upper #(abstract-all-fn syms %))))
+                          constraints)
+        bounds (mapv (fn [b]
+                       (-> b
+                           (update :lower #(abstract-all-fn syms %))
+                           (update :upper #(abstract-all-fn syms %))))
+                     (or bounds
+                         (repeat (count syms) {:lower -nothing :upper -any})))]
+    {:op :Poly
+     :syms (or original-names (vec syms))
+     :bounds bounds
+     :constraints constraints
+     :type ab}))
