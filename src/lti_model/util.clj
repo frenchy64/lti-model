@@ -50,3 +50,49 @@
       (= (count ts) 1) (first ts)
       :else {:op :Intersection
              :types ts})))
+
+; Name T [[Integer T -> T] Integer T -> (U nil T)] -> Scope
+(defn abstract-by [n t f]
+  (letfn [; Integer T -> T
+          (name-to [outer t]
+            {:pre [(:op t)
+                   (integer? outer)]}
+            (let [nt #(name-to outer %)
+                  ntv #(mapv nt %)]
+              (or (f name-to outer t)
+                  (case (:op t)
+                    (:B :Base) t
+                    :Union (make-U (map nt (:types t)))
+                    :Intersection (make-I (map nt (:types t)))
+                    :Seq (update t :type nt)
+                    :F (if (= n (:name t))
+                         {:op :B
+                          :index outer}
+                         t)
+                    :Poly (-> t
+                              (update :type nt)
+                              (update :constraints (fn [cs]
+                                                     (mapv #(-> %
+                                                                (update :lower nt)
+                                                                (update :upper nt))
+                                                           cs)))
+                              (update :bounds (fn [bs]
+                                                (mapv #(-> %
+                                                           (update :lower nt)
+                                                           (update :upper nt))
+                                                      bs))))
+                    :Fn (-> t
+                            (update :dom ntv)
+                            (update :rng nt))
+                    :IFn (update t :methods ntv)
+                    :Scope (update t :scope #(name-to (inc outer) %))))))]
+    {:op :Scope
+     :scope (name-to 0 t)}))
+
+; (Vec Name) T [Name T -> Scope] -> Scope
+(defn abstract-all-by [syms t ab]
+  {:pre [(vector? syms)]}
+  (reduce (fn [t sym]
+            (ab sym t))
+          t
+          (rseq syms)))

@@ -3,7 +3,8 @@
             [clojure.string :as str]
             [lti-model.topo :as topo]
             [lti-model.util :refer [Poly-frees -Int -Num -any -nothing
-                                    IFn? Base? Poly? Fn? make-U make-I]]
+                                    IFn? Base? Poly? Fn? make-U make-I]
+             :as u]
             [clojure.pprint :refer [pprint]]))
 
 ; e ::=              ; Expressions
@@ -100,47 +101,16 @@
 (def -wild {:op :Wild})
 (defn Closure? [t] (= :Closure (:op t)))
 
-; Name Expr -> Scope
+; Name T -> Scope
 (defn abstract [n t]
-  (letfn [(name-to [outer t]
-            {:pre [(:op t)
-                   (integer? outer)]}
-            (let [nt #(name-to outer %)
-                  ntv #(mapv nt %)]
-              (case (:op t)
-                (:Wild :Closure :B :Base) t
-                :Union (make-U (map nt (:types t)))
-                :Intersection (make-I (map nt (:types t)))
-                :Seq (update t :type nt)
-                :F (if (= n (:name t))
-                     {:op :B
-                      :index outer}
-                     t)
-                :Poly (-> t
-                          (update :type nt)
-                          (update :constraints (fn [cs]
-                                                 (mapv #(-> %
-                                                            (update :lower nt)
-                                                            (update :upper nt))
-                                                       cs)))
-                          (update :bounds (fn [bs]
-                                            (mapv #(-> %
-                                                       (update :lower nt)
-                                                       (update :upper nt))
-                                                  bs))))
-                :Fn (-> t
-                        (update :dom ntv)
-                        (update :rng nt))
-                :IFn (update t :methods ntv)
-                :Scope (update t :scope #(name-to (inc outer) %)))))]
-    {:op :Scope
-     :scope (name-to 0 t)}))
+  (u/abstract-by n t
+                 (fn [name-to outer t]
+                   (case (:op t)
+                     (:Wild :Closure) t
+                     nil))))
 
 (defn abstract-all [syms t]
-  (reduce (fn [t sym]
-            (abstract sym t))
-          t
-          (rseq syms)))
+  (u/abstract-all-by syms t abstract))
 
 (defn walk-type [f t]
   (let [wlk #(f %)]
