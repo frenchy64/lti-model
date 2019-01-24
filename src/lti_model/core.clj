@@ -186,78 +186,42 @@
                        {:Poly-frees Poly-frees
                         :Poly-body Poly-body
                         :Poly-constraints Poly-constraints
-                        :unparse-env unparse-env
                         :Poly-bounds Poly-bounds
                         :unparse-type unparse-type})))
-
-(defn variance? [v]
-  (contains? #{:covariant :contravariant :invariant} v))
-
-
-(defn merge-fv-variances [& vs]
-  (letfn [(combine-variances [v1 v2]
-            {:pre [(variance? v1)
-                   (variance? v2)]
-             :post [(variance? %)]}
-            (if (= v1 v2)
-              v1
-              :invariant))]
-    (apply merge-with combine-variances vs)))
 
 (declare fv-variances)
 
 (defn Poly-bounds-fv-variances [bounds]
-  (apply merge-fv-variances 
+  (apply u/merge-fv-variances 
          (map (fn [{:keys [lower upper]}]
-                (merge-fv-variances (fv-variances lower)
-                                    (fv-variances upper)))
+                (u/merge-fv-variances (fv-variances lower)
+                                      (fv-variances upper)))
               bounds)))
 
 (defn Poly-bounds-fv [bounds]
   (set (keys (Poly-bounds-fv-variances bounds))))
 
 (defn Poly-constraints-fv-variances [constraints]
-  (apply merge-fv-variances 
+  (apply u/merge-fv-variances 
          (map (fn [{:keys [lower upper]}]
-                (merge-fv-variances (fv-variances lower)
-                                    (fv-variances upper)))
+                (u/merge-fv-variances (fv-variances lower)
+                                      (fv-variances upper)))
               constraints)))
 
 (defn Poly-constraints-fv [constraints]
   (set (keys (Poly-constraints-fv-variances constraints))))
 
 (defn fv-variances [t]
-  (let [flip-variances (fn [v]
-                        {:pre [(variance? v)]
-                         :post [(variance? %)]}
-                        ({:covariant :contravariant
-                          :contravariant :covariant
-                          :invariant :invariant}
-                         v))]
-    (case (:op t)
-      (:Wild :Closure :B :Base) {}
-      ; FIXME :constraints variances?
-      :Poly (merge-fv-variances (fv-variances (:type t))
+  (case (:op t)
+    ; FIXME :constraints variances?
+    :Poly (u/merge-fv-variances (fv-variances (:type t))
                                 (Poly-bounds-fv-variances (:bounds t))
                                 (Poly-constraints-fv-variances (:constraints t)))
-      :F {(with-meta (:name t) (select-keys t [:original-name]))
-          :covariant}
-      :Scope (fv-variances (:scope t))
-      (:Intersection :Union) (apply merge-fv-variances (map fv-variances (:types t)))
-      :Seq (fv-variances (:type t))
-      :Fn (let [dom (apply merge-fv-variances
-                           (map (fn [t]
-                                  (let [vs (fv-variances t)]
-                                    (zipmap (keys vs)
-                                            (map flip-variances (vals vs)))))
-                                (:dom t)))
-                rng (fv-variances (:rng t))]
-            (merge-fv-variances dom rng))
-      :IFn (apply merge-fv-variances (map fv-variances (:methods t)))
-      (assert nil (str "Cannot find fv for type: " (pr-str t))))))
+    (:Wild :Closure) {}
+    (u/fv-variances-by t {:fv-variances fv-variances})))
 
 (defn fv [t]
-  (set (keys (fv-variances t))))
+  (u/fv-by t {:fv-variances fv-variances}))
 
 (def constant-type
   {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))
@@ -303,7 +267,7 @@
         gs-variances (merge
                        (zipmap gs-names (repeat :constant))
                        (select-keys
-                         (merge-fv-variances
+                         (u/merge-fv-variances
                            (Poly-bounds-fv-variances bounds)
                            (Poly-constraints-fv-variances constraints)
                            (fv-variances body))

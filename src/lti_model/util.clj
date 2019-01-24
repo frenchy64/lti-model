@@ -250,7 +250,6 @@
 (defn unparse-type-by [t {:keys [Poly-frees
                                  Poly-body
                                  Poly-constraints
-                                 unparse-env
                                  Poly-bounds
                                  unparse-type]}]
   (case (:op t)
@@ -299,3 +298,47 @@
              (first methods)
              (doall (list* 'IFn methods))))
     (assert nil (str "Cannot unparse type: " (pr-str t)))))
+
+(defn variance? [v]
+  (contains? #{:covariant :contravariant :invariant} v))
+
+(defn merge-fv-variances [& vs]
+  (letfn [(combine-variances [v1 v2]
+            {:pre [(variance? v1)
+                   (variance? v2)]
+             :post [(variance? %)]}
+            (if (= v1 v2)
+              v1
+              :invariant))]
+    (apply merge-with combine-variances vs)))
+
+(defn flip-variances [v]
+  {:pre [(variance? v)]
+   :post [(variance? %)]}
+  ({:covariant :contravariant
+    :contravariant :covariant
+    :invariant :invariant}
+   v))
+
+(defn fv-variances-by [t {:keys [fv-variances]}]
+  (let []
+    (case (:op t)
+      (:B :Base) {}
+      :F {(with-meta (:name t) (select-keys t [:original-name]))
+          :covariant}
+      :Scope (fv-variances (:scope t))
+      (:Intersection :Union) (apply merge-fv-variances (map fv-variances (:types t)))
+      :Seq (fv-variances (:type t))
+      :Fn (let [dom (apply merge-fv-variances
+                           (map (fn [t]
+                                  (let [vs (fv-variances t)]
+                                    (zipmap (keys vs)
+                                            (map flip-variances (vals vs)))))
+                                (:dom t)))
+                rng (fv-variances (:rng t))]
+            (merge-fv-variances dom rng))
+      :IFn (apply merge-fv-variances (map fv-variances (:methods t)))
+      (assert nil (str "Cannot find fv for type: " (pr-str t))))))
+
+(defn fv-by [t {:keys [fv-variances]}]
+  (set (keys (fv-variances t))))
