@@ -173,61 +173,19 @@
                [k (unparse-type v)]))
         env))
 
-(def ^:dynamic *verbose-types* nil)
-
 (defn unparse-type-verbose [t]
-  (binding [*verbose-types* true]
+  (binding [u/*verbose-types* true]
     (unparse-type t)))
 
 ; T -> Any
 (defn unparse-type [t]
-  (case (:op t)
-    :Wild '?
-    :Poly (let [gs (Poly-frees t)
-                body (unparse-type (Poly-body t gs))
-                constraints (mapv (fn [{:keys [lower upper]}]
-                                    [(unparse-type lower) :< (unparse-type upper)])
-                                  (Poly-constraints t gs))]
-            (list 'All
-                  (into (mapv (fn [v b]
-                                (let [n ((some-fn #(when-not *verbose-types*
-                                                     (:original-name %))
-                                                  :name) v)]
-                                  (cond
-                                    (and (= -any (:upper b))
-                                         (= -nothing (:lower b)))
-                                    n
-                                    (= -any (:upper b))
-                                    [n :lower (unparse-type (:lower b))]
-                                    (= -nothing (:lower b))
-                                    [n :upper (unparse-type (:upper b))]
-                                    :else 
-                                    [n :lower (unparse-type (:lower b)) :upper (unparse-type (:upper b))])))
-                              gs (Poly-bounds t gs))
-                        (when (seq constraints)
-                          [:constraints (set constraints)]))
-                  body))
-    :F (or (when (not *verbose-types*)
-             (:original-name t))
-           (:name t))
-    :B (:index t)
-    :Union (if (empty? (:types t))
-             'Nothing
-             (list* 'U (mapv unparse-type (:types t))))
-    :Intersection (if (empty? (:types t))
-                    'Any
-                    (list* 'I (mapv unparse-type (:types t))))
-    :Closure (list 'Closure (unparse-env (:env t)) (:expr t))
-    :Seq (list 'Seq (unparse-type (:type t)))
-    :Base (:name t)
-    :Fn (let [dom (mapv unparse-type (:dom t))
-              rng (unparse-type (:rng t))]
-          (vec (concat dom [:-> rng])))
-    :IFn (let [methods (mapv unparse-type (:methods t))]
-           (if (= 1 (count methods))
-             (first methods)
-             (doall (list* 'IFn methods))))
-    (assert nil (str "Cannot unparse type: " (pr-str t)))))
+  (u/unparse-type-by t 
+                     {:Poly-frees Poly-frees
+                      :Poly-body Poly-body
+                      :Poly-constraints Poly-constraints
+                      :unparse-env unparse-env
+                      :Poly-bounds Poly-bounds
+                      :unparse-type unparse-type}))
 
 (defn variance? [v]
   (contains? #{:covariant :contravariant :invariant} v))
@@ -584,7 +542,7 @@
   (into #{} (map unparse-delay) ds))
 
 (defn unparse-free-name [s]
-  (or (when-not *verbose-types*
+  (or (when-not u/*verbose-types*
         (-> s meta :original-name))
       s))
 
