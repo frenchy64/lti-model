@@ -2,6 +2,8 @@
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [lti-model.topo :as topo]
+            [lti-model.util :refer [Poly-frees -Int -Num -any -nothing
+                                    IFn? Base? Poly? Fn?]]
             [clojure.pprint :refer [pprint]]))
 
 ; e ::=              ; Expressions
@@ -33,6 +35,8 @@
 ; s ::= (All [x+] (IFn [t * :-> t]+)) ;type schemes
 ; Any = (I)
 ; Nothing = (U)
+
+(def type-error-kw ::type-error)
 
 #_
 (t/defalias Scope
@@ -96,15 +100,7 @@
 (declare make-U make-I)
 
 (def -wild {:op :Wild})
-(def -Int {:op :Base :name 'Int})
-(def -Num {:op :Base :name 'Num})
-(def -any {:op :Intersection :types #{}})
-(def -nothing {:op :Union :types #{}})
-(defn IFn? [t] (= :IFn (:op t)))
-(defn Base? [t] (= :Base (:op t)))
-(defn Poly? [t] (= :Poly (:op t)))
 (defn Closure? [t] (= :Closure (:op t)))
-(defn Fn? [t] (= :Fn (:op t)))
 
 ; Name Expr -> Scope
 (defn abstract [n t]
@@ -241,15 +237,6 @@
               (update :upper #(instantiate-all images %))))
         (:bounds p)))
 
-; Poly -> (Vec '{:op ':F})
-(defn Poly-frees [p]
-  {:pre [(= :Poly (:op p))]}
-  (mapv (fn [s]
-          {:pre [(symbol? s)]}
-          {:op :F :name (with-meta (gensym s) {:original-name s})
-           :original-name s})
-        (:syms p)))
-
 (declare parse-type)
 
 ; (Seqable Sym) Type -> Poly
@@ -322,7 +309,7 @@
                          (let [[args [_ ret & more]] (split-with (complement #{:->}) t)]
                            (when more
                              (throw (ex-info (str "Extra arguments after :-> in function type: " more)
-                                             {::type-error true})))
+                                             {type-error-kw true})))
                            {:op :Fn
                             :dom (mapv parse-type args)
                             :rng (parse-type ret)}))]
@@ -730,7 +717,7 @@
   (throw (ex-info
            (str msg "\nActual:\n\t" (print-str (unparse-type t)) "\nExpected:\n\t" (print-str (unparse-type P))
                 "\nin:\n\t" e)
-           {::type-error true})))
+           {type-error-kw true})))
 
 (defn check-match [t P m e]
   {:pre [(:op t)
@@ -1331,11 +1318,11 @@
     :Intersection (let [successes (keep #(solve-app P % cargs) (:types cop))]
                     (when (empty? successes)
                       (throw (ex-info (str "Cannot invoke " (unparse-type cop))
-                                      {::type-error true})))
+                                      {type-error-kw true})))
                     (make-I successes))
     :Union (make-U (map #(solve-app P % cargs) (:types cop)))
     :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
-                          {::type-error true}))
+                          {type-error-kw true}))
     :Closure (let [_ (assert *closure-cache*)
                    _ (some-> *closure-cache*
                        (swap! (fn [closure-cache]
@@ -1348,7 +1335,7 @@
                                                              (closure-report closure-cache cop)
                                                              ;"\n" (mapv unparse-type cargs)
                                                              )
-                                                        {::type-error true}))
+                                                        {type-error-kw true}))
                                         (-> m
                                             (assoc :reduction-count i)
                                             (update :expecteds update {:args cargs :ret P} (fnil inc 0))))))))))
@@ -1361,7 +1348,7 @@
                                                                (some-> *closure-cache* deref (closure-report cop))
                                                                ;"\n" (mapv unparse-type cargs)
                                                                )
-                                                          {::type-error true}))
+                                                          {type-error-kw true}))
                                           i)))))
 
                    ifn (check {:op :IFn
@@ -1433,7 +1420,7 @@
                  ann (let [[e' at & more] args
                            _ (when more
                                (throw (ex-info (str "Extra arguments to 'ann': " more)
-                                               {::type-error true})))
+                                               {type-error-kw true})))
                            _ (assert (= 2 (count args)) "Not enough arguments to 'ann'")
                            t (check (parse-type at) env e')
                            m (smallest-matching-super t P)]
@@ -1442,7 +1429,7 @@
                  let (let [[b body & more] args
                            _ (when more
                                (throw (ex-info (str "Extra arguments to 'let': " more)
-                                               {::type-error true})))
+                                               {type-error-kw true})))
                            _ (assert (= 2 (count args)))
                            _ (assert (even? (count b)))
                            _ (assert (vector? b))
@@ -1454,7 +1441,7 @@
                    (let [[plist body & more] args
                          _ (when more
                              (throw (ex-info (str "Extra arguments to 'fn': " more)
-                                             {::type-error true})))
+                                             {type-error-kw true})))
                            _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
                           t (cond
                               (= -wild P) {:op :Closure
@@ -1471,7 +1458,7 @@
                                                                                 "\nExpected:\n\t" (count (:dom m))
                                                                                 "\nExpected type:\n\t" (unparse-type m)
                                                                                 "\nin:\n\t" e)
-                                                                           {::type-error true})))
+                                                                           {type-error-kw true})))
                                                          ;(prn "checking lambda" e)
                                                          ;(prn "method" (unparse-type m))
                                                          (let [;demote wildcards
@@ -1496,7 +1483,7 @@
                               :else (throw (ex-info (str "Function does not match expected type:"
                                                          "\nExpected:\n\t" (unparse-type P)
                                                          "\nin:\n\t" e)
-                                                    {::type-error true})))]
+                                                    {type-error-kw true})))]
                       t)
                  (let [cop (check -wild env op)
                        cargs (mapv #(check -wild env %) args)
@@ -1508,7 +1495,7 @@
                                             "\nArguments:\n" (apply str (map #(println-str (str "\t" %)) (map unparse-type cargs)))
                                             "Expected:\n\t" (unparse-type P)
                                             "\n\nin:\n\t" e)
-                                       {::type-error true}))))))
+                                       {type-error-kw true}))))))
     (integer? e) (let [t -Int
                        m (smallest-matching-super t P)]
                    (check-match t P m e))

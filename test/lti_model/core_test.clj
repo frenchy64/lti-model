@@ -10,7 +10,7 @@
 (defmacro handle-type-error [f & body]
   `(try (do ~@body)
         (catch clojure.lang.ExceptionInfo e# 
-          (if (::lti/type-error (ex-data e#))
+          (if (lti/type-error-kw (ex-data e#))
             (~f e#)
             (throw e#)))))
 
@@ -936,6 +936,14 @@
                          (fn [g] (fn [x] (f (g g) x)))))]
                 (let [compute (Y (fn [f x] (+ 1 (f x))))]
                   (compute 1)))))
+  )
+
+(deftest self-application
+  (is (tc-err ?
+              ((fn [f] (f f)) (fn [f] (f f)))))
+  (is (tc-err ?
+              (let [f (fn [f] (f f))]
+                (f f))))
   )
 
 (deftest closure-suggestions
