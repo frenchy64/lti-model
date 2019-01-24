@@ -3,7 +3,8 @@
             [clojure.string :as str]
             [lti-model.topo :as topo]
             [lti-model.util :refer [Poly-frees -Int -Num -any -nothing
-                                    IFn? Base? Poly? Fn? make-U make-I]
+                                    IFn? Base? Poly? Fn? make-U make-I
+                                    type-error-kw]
              :as u]
             [clojure.pprint :refer [pprint]]))
 
@@ -36,8 +37,6 @@
 ; s ::= (All [x+] (IFn [t * :-> t]+)) ;type schemes
 ; Any = (I)
 ; Nothing = (U)
-
-(def type-error-kw ::type-error)
 
 #_
 (t/defalias Scope
@@ -95,8 +94,6 @@
 (t/defalias Env
   "Representation for type environments"
   (t/Map t/Sym T))
-
-(def ^:dynamic *tvar* #{})
 
 (def -wild {:op :Wild})
 (defn Closure? [t] (= :Closure (:op t)))
@@ -158,44 +155,15 @@
               (update :upper #(instantiate-all images %))))
         (:bounds p)))
 
-(declare parse-type)
-
 (defn Poly* [syms t & args]
   (apply u/Poly*-by syms t abstract-all args))
 
 ; Any -> T
 (defn parse-type [t]
-  (let [parse-fn-arity (fn [t]
-                         {:pre [(vector? t)]}
-                         (let [[args [_ ret & more]] (split-with (complement #{:->}) t)]
-                           (when more
-                             (throw (ex-info (str "Extra arguments after :-> in function type: " more)
-                                             {type-error-kw true})))
-                           {:op :Fn
-                            :dom (mapv parse-type args)
-                            :rng (parse-type ret)}))]
-    (cond
-      (vector? t) {:op :IFn
-                   :methods [(parse-fn-arity t)]}
-      (seq? t) (case (first t)
-                 U (make-U (map parse-type (rest t)))
-                 I (make-I (map parse-type (rest t)))
-                 Seq {:op :Seq
-                      :type (parse-type (second t))}
-                 All (let [[syms t] (rest t)]
-                       (binding [*tvar* (into *tvar* syms)]
-                         (Poly* syms (parse-type t))))
-                 IFn (let [methods (mapv parse-fn-arity (rest t))]
-                       (assert (seq methods))
-                       {:op :IFn
-                        :methods methods}))
-      ('#{Int} t) -Int
-      ('#{Num} t) -Num
-      ('#{Any} t) -any
-      ('#{Nothing} t) -nothing
-      ('#{?} t) {:op :Wild}
-      ((every-pred symbol? *tvar*) t) {:op :F :name t}
-      :else (assert false (str "Error parsing type: " t)))))
+  (cond
+    ('#{?} t) -wild
+    :else (u/parse-type-by t {:Poly* Poly*
+                              :parse-type parse-type})))
 
 (declare unparse-type)
 

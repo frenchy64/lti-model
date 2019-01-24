@@ -2,7 +2,8 @@
   (:require [clojure.test :refer :all]
             [clojure.pprint :refer [pprint]]
             [clojure.walk :as walk]
-            [lti-model.core :refer :all :as lti]))
+            [lti-model.core :refer :all :as lti]
+            [lti-model.util :as u]))
 
 (defmacro tc [P e]
   `(unparse-type (check-form (parse-type '~P) {} '~e)))
@@ -10,7 +11,7 @@
 (defmacro handle-type-error [f & body]
   `(try (do ~@body)
         (catch clojure.lang.ExceptionInfo e# 
-          (if (lti/type-error-kw (ex-data e#))
+          (if (u/type-error-kw (ex-data e#))
             (~f e#)
             (throw e#)))))
 

@@ -1,6 +1,8 @@
 (ns lti-model.util
   )
 
+(def type-error-kw ::type-error)
+
 ; Poly -> (Vec '{:op ':F})
 (defn Poly-frees [p]
   {:pre [(= :Poly (:op p))]}
@@ -208,3 +210,37 @@
      :bounds bounds
      :constraints constraints
      :type ab}))
+
+(def ^:dynamic *tvar* #{})
+
+(defn parse-type-by [t {:keys [Poly* parse-type]}]
+  (let [parse-fn-arity (fn [t]
+                         {:pre [(vector? t)]}
+                         (let [[args [_ ret & more]] (split-with (complement #{:->}) t)]
+                           (when more
+                             (throw (ex-info (str "Extra arguments after :-> in function type: " more)
+                                             {type-error-kw true})))
+                           {:op :Fn
+                            :dom (mapv parse-type args)
+                            :rng (parse-type ret)}))]
+    (cond
+      (vector? t) {:op :IFn
+                   :methods [(parse-fn-arity t)]}
+      (seq? t) (case (first t)
+                 U (make-U (map parse-type (rest t)))
+                 I (make-I (map parse-type (rest t)))
+                 Seq {:op :Seq
+                      :type (parse-type (second t))}
+                 All (let [[syms t] (rest t)]
+                       (binding [*tvar* (into *tvar* syms)]
+                         (Poly* syms (parse-type t))))
+                 IFn (let [methods (mapv parse-fn-arity (rest t))]
+                       (assert (seq methods))
+                       {:op :IFn
+                        :methods methods}))
+      ('#{Int} t) -Int
+      ('#{Num} t) -Num
+      ('#{Any} t) -any
+      ('#{Nothing} t) -nothing
+      ((every-pred symbol? *tvar*) t) {:op :F :name t}
+      :else (assert false (str "Error parsing type: " t)))))
