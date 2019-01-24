@@ -120,42 +120,16 @@
                       (:Wild :Closure) t
                       nil))))
 
-; Expr Scope -> Expr
+; T Scope -> T
 (defn instantiate [image t]
   {:pre [(= :Scope (:op t))
          (:op image)]
    :post [(:op %)]}
-  (letfn [(replace [outer t]
-            {:pre [(integer? outer)]
-             :post [(:op %)]}
-            (let [rp #(replace outer %)
-                  rpv #(mapv rp %)]
-              (case (:op t)
-                (:Wild :Closure :F :Base) t
-                :Union (make-U (map rp (:types t)))
-                :Intersection (make-I (map rp (:types t)))
-                :Seq (update t :type rp)
-                :Poly (-> t
-                          (update :type rp)
-                          (update :constraints (fn [cs]
-                                                 (mapv #(-> %
-                                                            (update :lower rp)
-                                                            (update :upper rp))
-                                                       cs)))
-                          (update :bounds (fn [bs]
-                                            (mapv #(-> %
-                                                       (update :lower rp)
-                                                       (update :upper rp))
-                                                  bs))))
-                :B (if (= outer (:index t))
-                     image
-                     t)
-                :Fn (-> t
-                        (update :dom rpv)
-                        (update :rng rp))
-                :IFn (update t :methods rpv)
-                :Scope (update t :scope #(replace (inc outer) %)))))]
-    (replace 0 (:scope t))))
+  (u/instantiate-by image t
+                    (fn [replace outer t]
+                      (case (:op t)
+                        (:Wild :Closure) t
+                        nil))))
 
 (defn instantiate-all [images t]
   (reduce (fn [t image]

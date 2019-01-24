@@ -123,3 +123,42 @@
                   (update :rng wlk))
           :IFn (update t :methods #(mapv wlk %))
           :Scope (update t :scope wlk)))))
+
+; T Scope [[Int T -> T] Int T -> (U nil T)] -> T
+(defn instantiate-by [image t f]
+  {:pre [(= :Scope (:op t))
+         (:op image)]
+   :post [(:op %)]}
+  (letfn [; Integer T -> T
+          (replace [outer t]
+            {:pre [(integer? outer)]
+             :post [(:op %)]}
+            (let [rp #(replace outer %)
+                  rpv #(mapv rp %)]
+              (or (f replace outer t)
+                  (case (:op t)
+                    (:F :Base) t
+                    :Union (make-U (map rp (:types t)))
+                    :Intersection (make-I (map rp (:types t)))
+                    :Seq (update t :type rp)
+                    :Poly (-> t
+                              (update :type rp)
+                              (update :constraints (fn [cs]
+                                                     (mapv #(-> %
+                                                                (update :lower rp)
+                                                                (update :upper rp))
+                                                           cs)))
+                              (update :bounds (fn [bs]
+                                                (mapv #(-> %
+                                                           (update :lower rp)
+                                                           (update :upper rp))
+                                                      bs))))
+                    :B (if (= outer (:index t))
+                         image
+                         t)
+                    :Fn (-> t
+                            (update :dom rpv)
+                            (update :rng rp))
+                    :IFn (update t :methods rpv)
+                    :Scope (update t :scope #(replace (inc outer) %))))))]
+    (replace 0 (:scope t))))
