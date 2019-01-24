@@ -3,7 +3,7 @@
             [clojure.string :as str]
             [lti-model.topo :as topo]
             [lti-model.util :refer [Poly-frees -Int -Num -any -nothing
-                                    IFn? Base? Poly? Fn?]]
+                                    IFn? Base? Poly? Fn? make-U make-I]]
             [clojure.pprint :refer [pprint]]))
 
 ; e ::=              ; Expressions
@@ -96,8 +96,6 @@
   (t/Map t/Sym T))
 
 (def ^:dynamic *tvar* #{})
-
-(declare make-U make-I)
 
 (def -wild {:op :Wild})
 (defn Closure? [t] (= :Closure (:op t)))
@@ -270,37 +268,6 @@
      :bounds bounds
      :constraints constraints
      :type ab}))
-
-(defn make-I [ts]
-  (let [ts (mapcat (fn [t]
-                     (if (= :Intersection (:op t))
-                       (:types t)
-                       [t]))
-                   ts)
-        ts (disj (set ts)
-                 -any)]
-    (cond
-      (contains? ts -nothing) -nothing
-      (= (count ts) 1) (first ts)
-      :else {:op :Intersection
-             :types ts})))
-
-(defn make-U [ts]
-  (let [ts (set
-             (mapcat (fn [t]
-                       (if (= :Union (:op t))
-                         (:types t)
-                         [t]))
-                     ts))
-        _ (assert (not (ts -nothing)))
-        ts (if (contains? ts -Num)
-             (disj ts -Int)
-             ts)]
-    (cond
-      (contains? ts -any) -any
-      (= (count ts) 1) (first ts)
-      :else {:op :Union
-             :types ts})))
 
 ; Any -> T
 (defn parse-type [t]
