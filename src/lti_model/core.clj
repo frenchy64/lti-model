@@ -112,30 +112,13 @@
 (defn abstract-all [syms t]
   (u/abstract-all-by syms t abstract))
 
+; [T -> T] T -> T
 (defn walk-type [f t]
-  (let [wlk #(f %)]
-    (case (:op t)
-      (:Wild :F :Base :B :Closure) t
-      :Union (make-U (map wlk (:types t)))
-      :Intersection (make-I (map wlk (:types t)))
-      :Seq (update t :type wlk)
-      :Poly (-> t
-                (update :type wlk)
-                (update :constraints (fn [cs]
-                                       (mapv #(-> %
-                                                  (update :lower wlk)
-                                                  (update :upper wlk))
-                                             cs)))
-                (update :bounds (fn [bs]
-                                  (mapv #(-> %
-                                             (update :lower wlk)
-                                             (update :upper wlk))
-                                        bs))))
-      :Fn (-> t
-              (update :dom #(mapv wlk %))
-              (update :rng wlk))
-      :IFn (update t :methods #(mapv wlk %))
-      :Scope (update t :scope wlk))))
+  (u/walk-type-by f t
+                  (fn [t]
+                    (case (:op t)
+                      (:Wild :Closure) t
+                      nil))))
 
 ; Expr Scope -> Expr
 (defn instantiate [image t]

@@ -96,3 +96,30 @@
             (ab sym t))
           t
           (rseq syms)))
+
+; [T -> T] T [T -> (U nil T)] -> T
+(defn walk-type-by [f t custom-walk]
+  (let [wlk #(f %)]
+    (or (custom-walk t)
+        (case (:op t)
+          (:F :Base :B) t
+          :Union (make-U (map wlk (:types t)))
+          :Intersection (make-I (map wlk (:types t)))
+          :Seq (update t :type wlk)
+          :Poly (-> t
+                    (update :type wlk)
+                    (update :constraints (fn [cs]
+                                           (mapv #(-> %
+                                                      (update :lower wlk)
+                                                      (update :upper wlk))
+                                                 cs)))
+                    (update :bounds (fn [bs]
+                                      (mapv #(-> %
+                                                 (update :lower wlk)
+                                                 (update :upper wlk))
+                                            bs))))
+          :Fn (-> t
+                  (update :dom #(mapv wlk %))
+                  (update :rng wlk))
+          :IFn (update t :methods #(mapv wlk %))
+          :Scope (update t :scope wlk)))))
