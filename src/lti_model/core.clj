@@ -299,9 +299,9 @@
     true
 
     (= :Intersection (:op t)) (every? #(subtype? s %) (:types t))
+    (= :Union (:op s))        (every? #(subtype? % t) (:types s))
     (= :Intersection (:op s)) (boolean (some #(subtype? % t) (:types s)))
-    (= :Union (:op t)) (boolean (some #(subtype? % t) (:types s)))
-    (= :Union (:op s)) (every? #(subtype? % t) (:types s))
+    (= :Union (:op t))        (boolean (some #(subtype? s %) (:types t)))
 
     (and (IFn? s)
          (IFn? t))
