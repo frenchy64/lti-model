@@ -3,5 +3,5 @@
 ; e ::=              ; Expressions
 ;     | c            ; constant functions
 ;     | n            ; integers
-;     | (fn ^{:interface t} [x *] e) ; functions
+;     | (fn [x *] e) ; functions
 ;     | [e *]        ; sequences

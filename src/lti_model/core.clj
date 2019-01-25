@@ -323,6 +323,7 @@
     ; in the *closure-cache* that might end up being irrelevant.
     ; Perhaps the Closure is called with a wrong number of arguments,
     ; and then we suggest an annotation with the wrong number of args.
+    ;FIXME need unit tests that pass even though a Closure failed to check
     (Closure? s) (boolean (check-or-nil t (:env s) (:expr s)))
     :else false))
 
@@ -455,6 +456,7 @@
                  sol
                  :original-names (mapv :original-name P-gs)))))
 
+    ;FIXME need unit tests that pass even though a Closure failed to check
     (Closure? t)
     (some-> (check-or-nil P (:env t) (:expr t))
             u/ret-t)
@@ -1212,14 +1214,18 @@
                            _ (assert (vector? b))
                            b (partition 2 b)]
                        (check P env
-                              (list* (list 'fn (mapv first b) body)
-                                     (map second b))))
+                              (reduce (fn [e b]
+                                        (list (list 'fn [(first b)] e)
+                                              (second b)))
+                                      body
+                                      (reverse b))))
                  (fn fn*)
-                   (let [[plist body & more] args
-                         _ (when more
-                             (throw (ex-info (str "Extra arguments to 'fn': " more)
-                                             {type-error-kw true})))
-                           _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
+                    (let [[plist body & more] args
+                          _ (when more
+                              (throw (ex-info (str "Extra arguments to 'fn': " more)
+                                              {type-error-kw true})))
+                          _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
+                          _ (assert (vector? plist) (str "'fn' takes a vector of arguments, found " plist))
                           r (cond
                               (= -wild P) (u/->Result e ;TODO annotate e and its body
                                                       {:op :Closure

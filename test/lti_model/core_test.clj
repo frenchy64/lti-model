@@ -8,6 +8,9 @@
 (defmacro tc [P e]
   `(unparse-type (u/ret-t (check-form (parse-type '~P) {} '~e))))
 
+(defmacro tc-exp [P e]
+  `(u/ret-e (check-form (parse-type '~P) {} '~e)))
+
 (defmacro tc-err [P e]
   `(u/handle-type-error (fn [^Exception e#]
                           (println (.getMessage e#))
@@ -1263,6 +1266,25 @@
   (is (= 'Num
          (tc ? (app2 +' 1 (ann 2 Num)))))
 )
+
+(deftest elaboration-test
+  (is (= 1 (tc-exp ? 1)))
+  (is (= '(fn [a] a)
+         (tc-exp ? (fn [a] a))))
+  (is (= '((fn [a] a) 1)
+         (tc-exp ? (let [a 1] a))))
+  (is (= '[1 ((fn [a] a) 1)]
+         (tc-exp ? [1 (let [a 1] a)])))
+  (is (= '[1 ((fn [a] ((fn [b] a) 2)) 1)]
+         (tc-exp ? [1 (let [a 1 b 2] a)])))
+  (is (= '(ann ((fn [a] a) 1) Int)
+         (tc-exp ? (ann (let [a 1] a) Int))))
+  #_
+  (is (= '(ann (fn [a] ((fn [a] a) 1))
+               [Int :-> Int])
+         (tc-exp ? (ann (fn [a] (let [a 1] a))
+                        [Int :-> Int]))))
+  )
 
 (comment
   ;Error messages
