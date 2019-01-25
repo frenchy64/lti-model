@@ -6,20 +6,12 @@
             [lti-model.util :as u]))
 
 (defmacro tc [P e]
-  `(unparse-type (check-form (parse-type '~P) {} '~e)))
-
-(defmacro handle-type-error [f & body]
-  `(try (do ~@body)
-        (catch clojure.lang.ExceptionInfo e# 
-          (if (u/type-error-kw (ex-data e#))
-            (~f e#)
-            (throw e#)))))
-
+  `(unparse-type (u/ret-t (check-form (parse-type '~P) {} '~e))))
 
 (defmacro tc-err [P e]
-  `(handle-type-error (fn [^Exception e#]
-                        (println (.getMessage e#))
-                        true)
+  `(u/handle-type-error (fn [^Exception e#]
+                          (println (.getMessage e#))
+                          true)
      (do (tc ~P ~e)
          false)))
 

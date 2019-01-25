@@ -3,6 +3,40 @@
 
 (def type-error-kw ::type-error)
 
+(defmacro handle-type-error [f & body]
+  `(try (do ~@body)
+        (catch clojure.lang.ExceptionInfo e# 
+          (if (type-error-kw (ex-data e#))
+            (~f e#)
+            (throw e#)))))
+
+(defn Type? [t] (and (map? t) (keyword? (:op t))))
+
+#_
+(t/defalias Result
+  '{:e E
+    :t T})
+
+(defn Result? [r]
+  (and (map? r)
+       (contains? r :e)
+       (Type? (:t r))))
+
+(defn ->Result [e t]
+  {:post [(Result? %)]}
+  {:e e
+   :t t})
+
+(defn ret-t [r]
+  {:pre [(Result? r)]
+   :post [(Type? %)]}
+  (:t r))
+
+(defn ret-e [r]
+  {:pre [(Result? r)]}
+  (:e r))
+
+
 ; Poly -> (Vec '{:op ':F})
 (defn Poly-frees [p]
   {:pre [(= :Poly (:op p))]}
@@ -21,8 +55,10 @@
 (defn Poly? [t] (= :Poly (:op t)))
 (defn Fn? [t] (= :Fn (:op t)))
 
-
+; (Seqable T) -> T
 (defn make-U [ts]
+  {:pre [(every? Type? ts)]
+   :post [(Type? %)]}
   (let [ts (set
              (mapcat (fn [t]
                        (if (= :Union (:op t))
@@ -39,7 +75,10 @@
       :else {:op :Union
              :types ts})))
 
+; (Seqable T) -> T
 (defn make-I [ts]
+  {:pre [(every? Type? ts)]
+   :post [(Type? %)]}
   (let [ts (mapcat (fn [t]
                      (if (= :Intersection (:op t))
                        (:types t)
@@ -342,3 +381,4 @@
 
 (defn fv-by [t {:keys [fv-variances]}]
   (set (keys (fv-variances t))))
+

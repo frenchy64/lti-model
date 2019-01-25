@@ -12,7 +12,7 @@
 ;     | c            ; constant functions
 ;     | n            ; integers
 ;     | (fn [x *] e) ; functions
-;     | (let [x e *] e) ; let
+;     | (let [x e] e) ; let
 ;     | (ann e t)    ; type ascription
 ;     | [e *]        ; sequences
 ; t ::=                    ; Types
@@ -243,7 +243,7 @@
    'intoT (parse-type '(All [a b] [(Seq b) (All [r] [[r b :-> r] :-> [r a :-> r]]) (Seq a) :-> (Seq b)]))
    })
 
-(declare subtype? check)
+(declare subtype? check check-or-nil)
 
 (defn subtype-Fn? [s t]
   {:pre [(= :Fn (:op s))
@@ -323,7 +323,7 @@
     ; in the *closure-cache* that might end up being irrelevant.
     ; Perhaps the Closure is called with a wrong number of arguments,
     ; and then we suggest an annotation with the wrong number of args.
-    (Closure? s) (boolean (check t (:env s) (:expr s)))
+    (Closure? s) (boolean (check-or-nil t (:env s) (:expr s)))
     :else false))
 
 (declare match-dir)
@@ -357,7 +357,10 @@
    Returns largest subtype of t that matches P if direction is :down.
   Returns nil if undefined."
   [dir t P]
-  {:post [((some-fn nil? :op) %)]}
+  {:pre [(#{:up :down} dir)
+         (u/Type? t)
+         (u/Type? P)]
+   :post [((some-fn nil? u/Type?) %)]}
   ;(prn "match-dir" dir)
   ;(prn "t" (unparse-type t))
   ;(prn "P" (unparse-type P))
@@ -453,7 +456,8 @@
                  :original-names (mapv :original-name P-gs)))))
 
     (Closure? t)
-    (check P (:env t) (:expr t))
+    (some-> (check-or-nil P (:env t) (:expr t))
+            u/ret-t)
 
     (and (= :Seq (:op t))
          (= :Seq (:op P)))
@@ -474,10 +478,10 @@
            {type-error-kw true})))
 
 (defn check-match [t P m e]
-  {:pre [(:op t)
-         (:op P)
-         ((some-fn :op nil?) m)]
-   :post [(:op %)]}
+  {:pre [(u/Type? t)
+         (u/Type? P)
+         ((some-fn u/Type? nil?) m)]
+   :post [(u/Type? %)]}
   (or m
       (expected-error "Did not match:" t P e)))
 
@@ -1063,7 +1067,12 @@
                                      *print-length* 10]
                              (str "\t\t" (prn-str (unparse-type rng)))))))))))))
 
+; T T (Seqable T) -> (U nil T)
 (defn solve-app [P cop cargs]
+  {:pre [(u/Type? P)
+         (u/Type? cop)
+         (every? u/Type? cargs)]
+   :post [((some-fn nil? u/Type?) %)]}
   ;(prn "solve-app" (:op cop))
   ;(prn "cop" (unparse-type cop))
   ;(prn "P" (unparse-type P))
@@ -1105,16 +1114,18 @@
                                                           {type-error-kw true}))
                                           i)))))
 
-                   ifn (check {:op :IFn
-                               :methods [{:op :Fn
-                                          :dom cargs
-                                          :rng P}]}
-                              (:env cop)
-                              (:expr cop))
+                   rifn (check {:op :IFn
+                                :methods [{:op :Fn
+                                           :dom cargs
+                                           :rng P}]}
+                               (:env cop)
+                               (:expr cop))
+                   ifn (u/ret-t rifn)
                    _ (assert (and (IFn? ifn)
                                   (= 1 (count (:methods ifn)))))
                    m (first (:methods ifn))
                    actual-rng (:rng m)
+                   _ (assert (u/Type? actual-rng))
                    _ (some-> *closure-cache*
                        (swap! update-in [cop :actual-rngs {:args cargs :ret P}]
                               (fn [actual-rngs]
@@ -1148,38 +1159,50 @@
 (declare check)
 
 (defn check-form [P env e]
+  (assert (not *closure-cache*) "Recursive check-form not allowed")
   (binding [*closure-cache* (atom {})
             *global-reduction-counter* (atom 0)]
+    (check P env e)))
+
+; T Env E -> (U nil Result)
+(defn check-or-nil [P env e]
+  {:post [((some-fn nil? u/Result?) %)]}
+  (u/handle-type-error (constantly nil)
     (check P env e)))
 
 #_
 (t/ann check [P Env E :-> T])
 (defn check [P env e]
-  {:pre [(:op P)
+  {:pre [(u/Type? P)
          (map? env)]
-   :post [(:op %)]}
+   :post [(u/Result? %)]}
   (cond
     (symbol? e) (let [t (or (get env e)
                             (constant-type e)
                             (assert nil (str "Bad symbol " e)))
                       m (smallest-matching-super t P)]
-                  (check-match t P m e))
-    (vector? e) (let [t {:op :Seq
-                         :type (make-U (mapv #(check -wild env %) e))}
+                  (u/->Result e (check-match t P m e)))
+    (vector? e) (let [rs (mapv #(check -wild env %) e)
+                      t {:op :Seq
+                         :type (make-U (map u/ret-t rs))}
                       m (smallest-matching-super t P)]
-                  (check-match t P m e))
-    (seq? e) (let [[op & args] e
-                   _ (assert (seq e))]
+                  (u/->Result (mapv u/ret-e rs)
+                              (check-match t P m e)))
+    ((every-pred seq? seq) e)
+             (let [[op & args] e]
                (case op
                  ann (let [[e' at & more] args
                            _ (when more
                                (throw (ex-info (str "Extra arguments to 'ann': " more)
                                                {type-error-kw true})))
                            _ (assert (= 2 (count args)) "Not enough arguments to 'ann'")
-                           t (check (parse-type at) env e')
-                           m (smallest-matching-super t P)]
+                           r (check (parse-type at) env e')
+                           t (u/ret-t r)
+                           m (smallest-matching-super t P)
+                           mtc (check-match t P m e)]
                        ;(prn "ann")
-                       (check-match t P m e))
+                       (u/->Result (list 'ann (u/ret-e r) (unparse-type mtc))
+                                   mtc))
                  let (let [[b body & more] args
                            _ (when more
                                (throw (ex-info (str "Extra arguments to 'let': " more)
@@ -1197,69 +1220,80 @@
                              (throw (ex-info (str "Extra arguments to 'fn': " more)
                                              {type-error-kw true})))
                            _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
-                          t (cond
-                              (= -wild P) {:op :Closure
-                                           :env env
-                                           :expr e}
+                          r (cond
+                              (= -wild P) (u/->Result e ;TODO annotate e and its body
+                                                      {:op :Closure
+                                                       :env env
+                                                       :expr e})
                               ;; TODO unions of functions
-                              (IFn? P) {:op :IFn
-                                        :methods (mapv (fn [m]
-                                                         {:pre [(Fn? m)]
-                                                          :post [(Fn? %)]}
-                                                         (when-not (= (count plist) (count (:dom m)))
-                                                           (throw (ex-info (str "Function does not match expected number of parameters"
-                                                                                "\nActual:\n\t" (count plist)
-                                                                                "\nExpected:\n\t" (count (:dom m))
-                                                                                "\nExpected type:\n\t" (unparse-type m)
-                                                                                "\nin:\n\t" e)
-                                                                           {type-error-kw true})))
-                                                         ;(prn "checking lambda" e)
-                                                         ;(prn "method" (unparse-type m))
-                                                         (let [;demote wildcards
-                                                               ; FIXME if we have wildcards in the domain, it might be more useful to return
-                                                               ; a Closure type after verifying this arity matches. But what if
-                                                               ; we want to attach some information to the Closure type?
-                                                               ddom (mapv #(demote #{} %) (:dom m))
-                                                               env (merge env (zipmap plist ddom))
-                                                               rng (check (:rng m) env body)]
-                                                           (assoc m
-                                                                  :dom ddom
-                                                                  :rng rng)))
-                                                       (:methods P))}
+                              (IFn? P) (let [t {:op :IFn
+                                                :methods (mapv (fn [m]
+                                                                 {:pre [(Fn? m)]
+                                                                  :post [(Fn? %)]}
+                                                                 (when-not (= (count plist) (count (:dom m)))
+                                                                   (throw (ex-info (str "Function does not match expected number of parameters"
+                                                                                        "\nActual:\n\t" (count plist)
+                                                                                        "\nExpected:\n\t" (count (:dom m))
+                                                                                        "\nExpected type:\n\t" (unparse-type m)
+                                                                                        "\nin:\n\t" e)
+                                                                                   {type-error-kw true})))
+                                                                 ;(prn "checking lambda" e)
+                                                                 ;(prn "method" (unparse-type m))
+                                                                 (let [;demote wildcards
+                                                                       ; FIXME if we have wildcards in the domain, it might be more useful to return
+                                                                       ; a Closure type after verifying this arity matches. But what if
+                                                                       ; we want to attach some information to the Closure type?
+                                                                       ddom (mapv #(demote #{} %) (:dom m))
+                                                                       env (merge env (zipmap plist ddom))
+                                                                       rrng (check (:rng m) env body)
+                                                                       rng (u/ret-t rrng)]
+                                                                   (assoc m
+                                                                          :dom ddom
+                                                                          :rng rng)))
+                                                               (:methods P))}]
+                                         (u/->Result
+                                           e ; TODO annotate e
+                                           t))
                               ; TODO unit tests for polymorphically annotated fn's
                               (Poly? P) (let [gs (Poly-frees P)
                                               gs-names (mapv :name gs)
                                               t (Poly-body P gs)
-                                              ct (check t env e)]
-                                          (Poly* gs-names ct
-                                                 :original-names (mapv :original-name gs)))
-                              (= -any P) -any
+                                              r (check t env e)]
+                                          (update r :t
+                                                  #(Poly* gs-names %
+                                                          :original-names (mapv :original-name gs))))
+                              (= -any P) (u/->Result e -any)
                               :else (throw (ex-info (str "Function does not match expected type:"
                                                          "\nExpected:\n\t" (unparse-type P)
                                                          "\nin:\n\t" e)
                                                     {type-error-kw true})))]
-                      t)
-                 (let [cop (check -wild env op)
-                       cargs (mapv #(check -wild env %) args)
-                       rt (solve-app P cop cargs)]
-                   (or rt
-                       (throw (ex-info (str "Could not apply function: "
-                                            "\nFunction:\n\t"
-                                            (indent-str-by "\t" (with-out-str (pprint (unparse-type cop))))
-                                            "\nArguments:\n" (apply str (map #(println-str (str "\t" %)) (map unparse-type cargs)))
-                                            "Expected:\n\t" (unparse-type P)
-                                            "\n\nin:\n\t" e)
-                                       {type-error-kw true}))))))
+                      r)
+                 (let [rcop (check -wild env op)
+                       cop (u/ret-t rcop)
+                       rcargs (mapv #(check -wild env %) args)
+                       cargs (mapv u/ret-t rcargs)
+                       t (solve-app P cop cargs)]
+                   (if t
+                     (u/->Result (list* (u/ret-e rcop) (map u/ret-e rcargs))
+                                 t)
+                     (throw (ex-info (str "Could not apply function: "
+                                          "\nFunction:\n\t"
+                                          (indent-str-by "\t" (with-out-str (pprint (unparse-type cop))))
+                                          "\nArguments:\n" (apply str (map #(println-str (str "\t" %)) (map unparse-type cargs)))
+                                          "Expected:\n\t" (unparse-type P)
+                                          "\n\nin:\n\t" e)
+                                     {type-error-kw true}))))))
     (integer? e) (let [t -Int
                        m (smallest-matching-super t P)]
-                   (check-match t P m e))
+                   (u/->Result e
+                               (check-match t P m e)))
     :else (assert nil (str "Bad expression in check: " e))))
 
 (comment
-  (check -Int {} 1)
-  (check -wild {} 1)
-  (check -wild {} [1 2])
-  (check -Int {} [1 2])
-  (check -wild {} '(fn [x] [1 2]))
-  (check -wild {} '(app (fn [x] [1 2]) 1))
+  (check-form -Int {} 1)
+  (check-form -wild {} 1)
+  (check-form -wild {} [1 2])
+  (check-form -Int {} [1 2])
+  (check-form -wild {} '(fn [x] [1 2]))
+  (check-form -wild {} '(app (fn [x] [1 2]) 1))
 )
