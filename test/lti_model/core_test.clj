@@ -1269,6 +1269,7 @@
 
 (deftest elaboration-test
   (is (= 1 (tc-exp ? 1)))
+  (is (= 'inc (tc-exp ? inc)))
   (is (= '(fn [a] a)
          (tc-exp ? (fn [a] a))))
   (is (= '((fn [a] a) 1)
@@ -1279,11 +1280,19 @@
          (tc-exp ? [1 (let [a 1 b 2] a)])))
   (is (= '(ann ((fn [a] a) 1) Int)
          (tc-exp ? (ann (let [a 1] a) Int))))
-  #_
   (is (= '(ann (fn [a] ((fn [a] a) 1))
                [Int :-> Int])
          (tc-exp ? (ann (fn [a] (let [a 1] a))
                         [Int :-> Int]))))
+  (is (= '(ann (fn [a] ((fn [a] a) 1))
+               (IFn [Int :-> Int]
+                    [Nothing :-> Int]))
+         (tc-exp ? (ann (fn [a] (let [a 1] a))
+                        (IFn [Int :-> Int]
+                             [Nothing :-> Int])))))
+  ;TODO insert type arguments
+  #_
+  (is (= (tc-exp ? (map inc [1 2 3]))))
   )
 
 (comment
