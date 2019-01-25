@@ -435,7 +435,7 @@
                          ;(prn "sol Poly IFn match" (some-> sol unparse-type))
                          ; FIXME is "smallest" correct here?
                          (when-let [ret (and sol
-                                             (smallest-matching-super sol rng))]
+                                             (smallest-matching-super (:rng-t sol) rng))]
                            (assoc m
                                   ; erase wildcards
                                   :dom (mapv #(demote #{} %) dom)
@@ -764,15 +764,18 @@
                     (get-in bounds [n :lower]))]))
         variances))
 
-(defn subst-with-constraint [X c t]
+(defn substitution-for-constraint [X c t]
   (let [variances (merge (zipmap X (repeat :constant))
                          (select-keys (fv-variances t) X))
         bounds (into {}
                      (map (fn [x]
                             [x {:lower (get-in c [:cs x :lower] -nothing)
                                 :upper (get-in c [:cs x :upper] -any)}]))
-                     X)
-        sbt (substitution-for-variances variances bounds)]
+                     X)]
+    (substitution-for-variances variances bounds)))
+
+(defn subst-with-constraint [X c t]
+  (let [sbt (substitution-for-constraint X c t)]
     (subst sbt t)))
 
 (defn order-delays [delays]
@@ -853,7 +856,8 @@
                           (prn "rng" (unparse-type rng))
                           (prn "wrng" (unparse-type wrng))
                           (when-let [sol (solve-app wrng (demote X lower) ddom)]
-                            (let [_ (prn "sol" (unparse-type sol))
+                            (let [sol (:rng-t sol)
+                                  _ (prn "sol" (unparse-type sol))
                                   c' (gen-constraint V X sol rng)]
                               (if (or (nil? c')
                                       (seq (:delay c')))
@@ -1076,23 +1080,32 @@
                                      *print-length* 10]
                              (str "\t\t" (prn-str (unparse-type rng)))))))))))))
 
-; T T (Seqable T) -> (U nil T)
+; T T (Seqable T) -> (U nil '{:rng-t T})
 (defn solve-app [P cop cargs]
   {:pre [(u/Type? P)
          (u/Type? cop)
          (every? u/Type? cargs)]
-   :post [((some-fn nil? u/Type?) %)]}
+   :post [(or (nil? %)
+              (and (map? %)
+                   (u/Type? (:rng-t %))))]}
   ;(prn "solve-app" (:op cop))
   ;(prn "cop" (unparse-type cop))
   ;(prn "P" (unparse-type P))
   ;(prn "cargs" (mapv unparse-type cargs))
   (case (:op cop)
-    :Intersection (let [successes (keep #(solve-app P % cargs) (:types cop))]
-                    (when (empty? successes)
-                      (throw (ex-info (str "Cannot invoke " (unparse-type cop))
-                                      {type-error-kw true})))
-                    (make-I successes))
-    :Union (make-U (map #(solve-app P % cargs) (:types cop)))
+    ;; FIXME what to do about instantiating intersections of polymorphic types?
+    :Intersection (let [successes (keep #(solve-app P % cargs) (:types cop))
+                        ;; FIXME what to do about instantiating unions of polymorphic types?
+                        _ (assert (not-any? :c successes))
+                        _ (when (empty? successes)
+                            (throw (ex-info (str "Cannot invoke " (unparse-type cop))
+                                            {type-error-kw true})))]
+                    {:rng-t (make-I (map :rng-t successes))})
+    :Union (let [sols (map #(solve-app P % cargs) (:types cop))
+                 ;; FIXME what to do about instantiating unions of polymorphic types?
+                 _ (assert (not-any? :c sols))
+                 rng-ts (map :rng-t sols)]
+             {:rng-t (make-U rng-ts)})
     :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
                           {type-error-kw true}))
     :Closure (let [_ (assert *closure-cache*)
@@ -1139,14 +1152,15 @@
                        (swap! update-in [cop :actual-rngs {:args cargs :ret P}]
                               (fn [actual-rngs]
                                 (conj (or actual-rngs #{}) actual-rng))))]
-               actual-rng)
-    :IFn (some (fn [m]
-                 {:pre [(Fn? m)]}
-                 (when (= (count cargs)
-                          (count (:dom m)))
-                   (when (every? identity (map subtype? cargs (:dom m)))
-                     (smallest-matching-super (:rng m) P))))
-               (:methods cop))
+               {:rng-t actual-rng})
+    :IFn (when-let [rng-t (some (fn [m]
+                                  {:pre [(Fn? m)]}
+                                  (when (= (count cargs)
+                                           (count (:dom m)))
+                                    (when (every? identity (map subtype? cargs (:dom m)))
+                                      (smallest-matching-super (:rng m) P))))
+                                (:methods cop))]
+           {:rng-t rng-t})
     :Poly (let [gs (Poly-frees cop)
                 gs-names (map :name gs)
                 V #{}
@@ -1162,7 +1176,8 @@
                 ;_ (prn "existing-c" (unparse-cset existing-c))
                 ]
             (case (:op body)
-              :IFn (some #(:rng-t (solve-pmethod V X % P cargs gs existing-c)) (:methods body))
+              :IFn (let [sol (some #(solve-pmethod V X % P cargs gs existing-c) (:methods body))]
+                     sol)
               nil))))
 
 (declare check)
@@ -1292,12 +1307,11 @@
                  (let [rcop (check -wild env op)
                        cop (u/ret-t rcop)
                        rcargs (mapv #(check -wild env %) args)
-                       cargs (mapv u/ret-t rcargs)
-                       t (solve-app P cop cargs)]
-                   (if t
+                       cargs (mapv u/ret-t rcargs)]
+                   (if-let [sol (solve-app P cop cargs)]
                      ; TODO insert inferred type arguments
                      (u/->Result (list* (u/ret-e rcop) (map u/ret-e rcargs))
-                                 t)
+                                 (:rng-t sol))
                      (throw (ex-info (str "Could not apply function: "
                                           "\nFunction:\n\t"
                                           (indent-str-by "\t" (with-out-str (pprint (unparse-type cop))))
