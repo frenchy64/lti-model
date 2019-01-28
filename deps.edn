@@ -1,5 +1,6 @@
 {:paths ["src"]
- :deps {org.clojure/core.typed.analyzer.jvm {:git/url "https://github.com/clojure/core.typed.analyzer.jvm.git"
+ :deps {org.clojure/clojure {:mvn/version "1.9.0"}
+        org.clojure/core.typed.analyzer.jvm {:git/url "https://github.com/clojure/core.typed.analyzer.jvm.git"
                                              :sha "f33af6a8b20aee407a8b7a7ca52fe319b81cb9b7"}}
  :aliases {:nREPL
            {:extra-deps
