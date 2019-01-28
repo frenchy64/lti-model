@@ -1008,6 +1008,11 @@
                    :interface m
                    :subst (substitution-for-constraint X c m)})))))))))
 
+; (defalias CExpected '{:args (Vec T) :ret T})
+
+; (Atom (Map Symbol '{:reduction-count Int,
+;                     :expecteds (Map CExpected Int)
+;                     :actual-rngs (Map CExpected (Set T))}))
 (def ^:dynamic *closure-cache* nil)
 (def ^:dynamic *reduction-limit* 20)
 (def ^:dynamic *global-reduction-counter* nil)
@@ -1016,6 +1021,7 @@
 (declare suggest-annotation)
 
 (def ^:dynamic *currently-suggesting-closures* #{})
+(def ^:dynamic *verbose-closure-suggestion* nil)
 
 ; The :Closure case in `subtype?` might cause irrelevant side effects
 ; to the closure-cache, so it might cause us to give bad suggestions sometimes.
@@ -1024,13 +1030,29 @@
 
 ; Symbol -> Type
 (defn suggested-annotation-for-closure [closure-cache cop]
-  {:pre [(symbol? cop)]
+  {:pre [(map? closure-cache)
+         (symbol? cop)]
    :post [(u/Type? %)]}
   (let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
     (if (contains? *currently-suggesting-closures* cop)
       -any ; probably in an infinite loop
       (binding [*currently-suggesting-closures* (conj *currently-suggesting-closures* cop)]
+        ;(prn "expecteds" cop entry closure-cache)
         (cond
+          *verbose-closure-suggestion*
+          (suggest-annotation
+            closure-cache
+            {:op :IFn
+             :methods (into []
+                            (comp (map (fn [[{:keys [args] :as expected} _]]
+                                         (let [actuals (get actual-rngs expected)
+                                               _ (assert (seq actuals))]
+                                           {:op :Fn
+                                            :dom args
+                                            :rng (make-U actuals)})))
+                                  (distinct))
+                            expecteds)})
+
           ; likely this is a good annotation for arguments
           (= (count expecteds) 1)
           (let [{:keys [args] :as expected} (key (first expecteds))
@@ -1058,15 +1080,17 @@
           :else -any)))))
 
 (defn suggest-annotation [closure-cache t]
-  {:post [(u/Type? %)]}
+  {:pre [(map? closure-cache)]
+   :post [(u/Type? %)]}
   (let [sg #(suggest-annotation closure-cache %)]
     (case (:op t)
       ;TODO handle free type variables, do they imply a polymorphic annotation, or perhaps just upcast to Any?
-      :Closure (suggested-annotation-for-closure closure-cache t)
+      :Closure (suggested-annotation-for-closure closure-cache (:id t))
       (walk-type sg t))))
 
 (defn closure-report [closure-cache cop]
-  {:pre [(Closure? cop)]}
+  {:pre [(map? closure-cache)
+         (Closure? cop)]}
   ; if a local function happens to have equivalent source and environment,
   ; their reports will probably be conflated
   (when-let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
@@ -1119,6 +1143,7 @@
                           {type-error-kw true}))
     :Closure (let [_ (assert *closure-cache*)
                    id (:id cop)
+                   ;_ (prn "checking closure" id)
                    _ (assert (symbol? id))
                    _ (some-> *closure-cache*
                        (swap! (fn [closure-cache]
@@ -1163,6 +1188,7 @@
                        (swap! update-in [id :actual-rngs {:args cargs :ret P}]
                               (fn [actual-rngs]
                                 (conj (or actual-rngs #{}) actual-rng))))]
+               ;(prn "intermediate cache" @*closure-cache*)
                {:interface {:op :IFn
                             :methods [{:op :Fn
                                        :dom cargs
@@ -1212,7 +1238,7 @@
                                               (map :name gs))}})
               nil))))
 
-(declare check)
+(declare check resolve-symbolic-closures)
 
 (defn check-form [P env e]
   (assert (not *closure-cache*) "Recursive check-form not allowed")
@@ -1220,7 +1246,9 @@
                                   :validator #(and (map? %)
                                                    (every? symbol? (keys %))))
             *global-reduction-counter* (atom 0 :validator int?)]
-    (check P env e)))
+    (let [e (check P env e)
+          r (resolve-symbolic-closures @*closure-cache* e)]
+      r)))
 
 ; T Env E -> (U nil Result)
 (defn check-or-nil [P env e]
@@ -1230,14 +1258,30 @@
 
 ; dirty-tree-walk expression e and resolve symbolic closures
 (defn resolve-symbolic-closures [closure-cache e]
-  (walk/prewalk (fn [e]
-                  (if (and (seq? e)
-                           (= ::ClosureByID (first e))
-                           (symbol? (second e)))
-                    (let [[_ _ id] e]
-                      )
-                    e))
-                e))
+  {:pre [(map? closure-cache)]}
+  ;postwalk because suggested-annotation-for-closure already traverses its result
+  ; to resolve closures
+  (walk/postwalk (fn [e]
+                   (if (and (seq? e)
+                            (= ::ClosureByID (first e))
+                            (symbol? (second e)))
+                     (let [[_ id] e]
+                       (assert (symbol? id))
+                       (unparse-type (binding [*verbose-closure-suggestion* true]
+                                       (suggested-annotation-for-closure closure-cache id))))
+                     e))
+                 e))
+
+(defn count-papps [t]
+  {:pre [(u/Type? t)]
+   :post [(int? %)]}
+  (let [cnt (atom 0)]
+    (walk-type (fn [t]
+                 (if (= :PApp (:op t))
+                   (swap! cnt inc)
+                   t))
+               t)
+    @cnt))
 
 #_
 (t/ann check [P Env E :-> T])
@@ -1300,7 +1344,7 @@
                                                    :expr e}
                                                 unp-delay (binding [*unparse-closure-by-id* true]
                                                             (unparse-type t))]
-                                            (u/->Result (list 'ann e unp-delay)
+                                            (u/->Result (list 'ann e 'Any #_unp-delay)
                                                         t))
                               (IFn? P) (let [methodrs (mapv (fn [m]
                                                               {:pre [(Fn? m)]
@@ -1359,10 +1403,13 @@
                        cargs (mapv u/ret-t rcargs)]
                    (if-let [sol (solve-app P cop cargs)]
                      (let [eop (u/ret-e rcop)
+                           previous-papps (count-papps cop)
+                           new-papps (count-papps cop)
                            unp-abbrev-closure (binding [*unparse-closure-by-id* true]
                                                 (unparse-type (:interface sol)))]
                        ;(prn "eop" eop)
-                       (u/->Result (list* (if (= cop unp-abbrev-closure)
+                       (u/->Result (list* (if (or (= cop unp-abbrev-closure)
+                                                  (= previous-papps new-papps))
                                             eop
                                             (list 'ann eop unp-abbrev-closure))
                                           (map u/ret-e rcargs))
@@ -1374,11 +1421,14 @@
                                           "Expected:\n\t" (unparse-type P)
                                           "\n\nin:\n\t" e)
                                      {type-error-kw true}))))))
-    (integer? e) (let [t -Int
-                       m (smallest-matching-super t P)]
-                   (u/->Result e
-                               (check-match t P m e)))
-    :else (assert nil (str "Bad expression in check: " e))))
+    ((some-fn integer? string?) e) (let [t (cond
+                                             (integer? e) -Int
+                                             (string? e) u/-Str)
+                                         _ (assert (u/Type? t))
+                                         m (smallest-matching-super t P)]
+                                     (u/->Result e
+                                                 (check-match t P m e)))
+    :else (assert nil (str "Bad expression in check: " (pr-str e)))))
 
 (comment
   (check-form -Int {} 1)

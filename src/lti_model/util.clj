@@ -47,6 +47,7 @@
         (:syms p)))
 
 (def -Int {:op :Base :name 'Int})
+(def -Str {:op :Base :name 'Str})
 (def -Num {:op :Base :name 'Num})
 (def -any {:op :Intersection :types #{}})
 (def -nothing {:op :Union :types #{}})

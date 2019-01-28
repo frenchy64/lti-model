@@ -1271,7 +1271,7 @@
 (deftest elaboration-test
   (is (= 1 (tc-exp ? 1)))
   (is (= 'inc (tc-exp ? inc)))
-  (is (= '(fn [a] a)
+  (is (= '(ann (fn [a] a) (IFn))
          (tc-exp ? (fn [a] a))))
   (is (= '((ann (fn [a] a)
                 [Int :-> Int])
@@ -1286,12 +1286,33 @@
                    [Int :-> Int])
               1)]
          (tc-exp ? [1 (let [a 1 b 2] a)])))
-  (is (= '(ann ((fn [a] a) 1) Int)
+  (is (= '(ann ((ann (fn [a] a)
+                     [Int :-> Int])
+                1)
+               Int)
          (tc-exp ? (ann (let [a 1] a) Int))))
-  (is (= '(ann (fn [a] ((fn [a] a) 1))
+  (is (= '(ann (fn [a] ((ann (fn [a] a)
+                             [Int :-> Int]) 1))
                [Int :-> Int])
          (tc-exp ? (ann (fn [a] (let [a 1] a))
                         [Int :-> Int]))))
+  (is (= '((ann (fn [f] [(f 1) (f "a")])
+                [(IFn [Int :-> Int] [Str :-> Str]) :-> (Seq (U Int Str))])
+           (ann (fn [x] x)
+                (IFn [Int :-> Int] [Str :-> Str])))
+         (tc-exp ? (let [f (fn [x] x)]
+                     [(f 1) (f "a")]))))
+  (is (= '((ann (fn [f] [((f 1) 2) ((f "a") "b")])
+                [(IFn [Int :-> [Int :-> Int]]
+                      [Str :-> [Str :-> Str]])
+                 :-> (Seq (U Int Str))])
+           (ann (fn [x]
+                  ;TODO inner annotation
+                  (fn [y] x))
+                (IFn [Int :-> [Int :-> Int]]
+                     [Str :-> [Str :-> Str]])))
+         (tc-exp ? (let [f (fn [x] (fn [y] x))]
+                     [((f 1) 2) ((f "a") "b")]))))
   (is (= '(ann (fn [a] ((fn [a] a) 1))
                (IFn [Int :-> Int]
                     [Nothing :-> Int]))
