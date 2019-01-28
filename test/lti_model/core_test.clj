@@ -1281,7 +1281,8 @@
                    [Int :-> Int])
               1)]
          (tc-exp ? [1 (let [a 1] a)])))
-  (is (= '[1 ((ann (fn [a] ((fn [b] a)
+  (is (= '[1 ((ann (fn [a] ((ann (fn [b] a)
+                                 [Int :-> Int])
                             2))
                    [Int :-> Int])
               1)]
@@ -1297,9 +1298,12 @@
          (tc-exp ? (ann (fn [a] (let [a 1] a))
                         [Int :-> Int]))))
   (is (= '((ann (fn [f] [(f 1) (f "a")])
-                [(IFn [Int :-> Int] [Str :-> Str]) :-> (Seq (U Int Str))])
+                [(IFn [Int :-> Int]
+                      [Str :-> Str])
+                 :-> (Seq (U Int Str))])
            (ann (fn [x] x)
-                (IFn [Int :-> Int] [Str :-> Str])))
+                (IFn [Int :-> Int]
+                     [Str :-> Str])))
          (tc-exp ? (let [f (fn [x] x)]
                      [(f 1) (f "a")]))))
   (is (= '((ann (fn [f] [((f 1) 2) ((f "a") "b")])
@@ -1307,18 +1311,34 @@
                       [Str :-> [Str :-> Str]])
                  :-> (Seq (U Int Str))])
            (ann (fn [x]
-                  ;TODO inner annotation
-                  (fn [y] x))
+                  (ann (fn [y] x)
+                       (EnclosingFnCase 0
+                         [Int :-> Any] [Int :-> Int]
+                         [Str :-> Any] [Str :-> Str])))
                 (IFn [Int :-> [Int :-> Int]]
                      [Str :-> [Str :-> Str]])))
          (tc-exp ? (let [f (fn [x] (fn [y] x))]
                      [((f 1) 2) ((f "a") "b")]))))
-  (is (= '(ann (fn [a] ((fn [a] a) 1))
+  (is (= '(ann (fn [a] ((ann (fn [a] a)
+                             [Int :-> Int])
+                        1))
                (IFn [Int :-> Int]
-                    [Nothing :-> Int]))
+                    [Str :-> Int]))
          (tc-exp ? (ann (fn [a] (let [a 1] a))
                         (IFn [Int :-> Int]
-                             [Nothing :-> Int])))))
+                             [Str :-> Int])))))
+  (is (= '(ann (fn [a]
+                 ((ann (fn [a]
+                         ((ann (fn [b] a)
+                               [Int :-> Int])
+                          2))
+                       [Int :-> Int])
+                  1))
+               (IFn [Int :-> Int]
+                    [Str :-> Int]))
+         (tc-exp ? (ann (fn [a] (let [a 1 b 2] a))
+                        (IFn [Int :-> Int]
+                             [Str :-> Int])))))
   (is (= '((ann map (PApp (All [a b] [[a :-> b] (Seq a) :-> (Seq b)]) Int Int)) inc [1 2 3])
          (tc-exp ? (map inc [1 2 3]))))
   )

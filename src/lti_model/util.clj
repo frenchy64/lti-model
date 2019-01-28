@@ -286,6 +286,7 @@
                         :methods methods}))
       ('#{Int} t) -Int
       ('#{Num} t) -Num
+      ('#{Str} t) -Str
       ('#{Any} t) -any
       ('#{Nothing} t) -nothing
       ((every-pred symbol? *tvar*) t) {:op :F :name t}
