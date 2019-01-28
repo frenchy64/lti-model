@@ -1,6 +1,7 @@
 (ns lti-model.core
   (:require [clojure.set :as set]
             [clojure.string :as str]
+            [clojure.walk :as walk]
             [lti-model.topo :as topo]
             [lti-model.util :refer [Poly-frees -Int -Num -any -nothing
                                     IFn? Base? Poly? Fn? make-U make-I
@@ -181,11 +182,15 @@
   (binding [u/*verbose-types* true]
     (unparse-type t)))
 
+(def ^:dynamic *unparse-closure-by-id* nil)
+
 ; T -> Any
 (defn unparse-type [t]
   (case (:op t)
     :Wild '?
-    :Closure (list 'Closure (unparse-env (:env t)) (:expr t))
+    :Closure (if *unparse-closure-by-id*
+               (list ::ClosureByID (:id t))
+               (list 'Closure (unparse-env (:env t)) (:expr t)))
     (u/unparse-type-by t 
                        {:Poly-frees Poly-frees
                         :Poly-body Poly-body
@@ -1016,8 +1021,10 @@
 ; to the closure-cache, so it might cause us to give bad suggestions sometimes.
 ; Of course, the type system will catch the errors if the users take our advice
 ; and actually use our suggested annotations.
+
+; Symbol -> Type
 (defn suggested-annotation-for-closure [closure-cache cop]
-  {:pre [(Closure? cop)]
+  {:pre [(symbol? cop)]
    :post [(u/Type? %)]}
   (let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
     (if (contains? *currently-suggesting-closures* cop)
@@ -1111,9 +1118,11 @@
     :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
                           {type-error-kw true}))
     :Closure (let [_ (assert *closure-cache*)
+                   id (:id cop)
+                   _ (assert (symbol? id))
                    _ (some-> *closure-cache*
                        (swap! (fn [closure-cache]
-                                (update closure-cache cop
+                                (update closure-cache id
                                   (fn [{i :reduction-count :as m}]
                                     (let [i ((fnil inc 0) i)]
                                       (if (some-> *reduction-limit*
@@ -1151,7 +1160,7 @@
                    actual-rng (:rng m)
                    _ (assert (u/Type? actual-rng))
                    _ (some-> *closure-cache*
-                       (swap! update-in [cop :actual-rngs {:args cargs :ret P}]
+                       (swap! update-in [id :actual-rngs {:args cargs :ret P}]
                               (fn [actual-rngs]
                                 (conj (or actual-rngs #{}) actual-rng))))]
                {:interface {:op :IFn
@@ -1207,8 +1216,10 @@
 
 (defn check-form [P env e]
   (assert (not *closure-cache*) "Recursive check-form not allowed")
-  (binding [*closure-cache* (atom {})
-            *global-reduction-counter* (atom 0)]
+  (binding [*closure-cache* (atom {}
+                                  :validator #(and (map? %)
+                                                   (every? symbol? (keys %))))
+            *global-reduction-counter* (atom 0 :validator int?)]
     (check P env e)))
 
 ; T Env E -> (U nil Result)
@@ -1216,6 +1227,17 @@
   {:post [((some-fn nil? u/Result?) %)]}
   (u/handle-type-error (constantly nil)
     (check P env e)))
+
+; dirty-tree-walk expression e and resolve symbolic closures
+(defn resolve-symbolic-closures [closure-cache e]
+  (walk/prewalk (fn [e]
+                  (if (and (seq? e)
+                           (= ::ClosureByID (first e))
+                           (symbol? (second e)))
+                    (let [[_ _ id] e]
+                      )
+                    e))
+                e))
 
 #_
 (t/ann check [P Env E :-> T])
@@ -1272,10 +1294,14 @@
                           _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
                           _ (assert (vector? plist) (str "'fn' takes a vector of arguments, found " plist))
                           r (cond
-                              (= -wild P) (u/->Result e ;TODO annotate e and its body
-                                                      {:op :Closure
-                                                       :env env
-                                                       :expr e})
+                              (= -wild P) (let [t {:op :Closure
+                                                   :id (gensym 'closure)
+                                                   :env env
+                                                   :expr e}
+                                                unp-delay (binding [*unparse-closure-by-id* true]
+                                                            (unparse-type t))]
+                                            (u/->Result (list 'ann e unp-delay)
+                                                        t))
                               (IFn? P) (let [methodrs (mapv (fn [m]
                                                               {:pre [(Fn? m)]
                                                                :post [(u/Result? %)
@@ -1333,15 +1359,12 @@
                        cargs (mapv u/ret-t rcargs)]
                    (if-let [sol (solve-app P cop cargs)]
                      (let [eop (u/ret-e rcop)
-                           ; must resolve symbolic closures
-                           subt (suggest-annotation
-                                  *closure-cache*
-                                  (:interface sol))]
-                       (prn "eop" eop)
-                       (prn "interface" (unparse-type subt))
-                       (u/->Result (list* (if (= cop subt)
+                           unp-abbrev-closure (binding [*unparse-closure-by-id* true]
+                                                (unparse-type (:interface sol)))]
+                       ;(prn "eop" eop)
+                       (u/->Result (list* (if (= cop unp-abbrev-closure)
                                             eop
-                                            (list 'ann eop (unparse-type subt)))
+                                            (list 'ann eop unp-abbrev-closure))
                                           (map u/ret-e rcargs))
                                    (:rng-t sol)))
                      (throw (ex-info (str "Could not apply function: "
