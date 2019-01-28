@@ -140,7 +140,10 @@
 
 ; [T -> T] T [T -> (U nil T)] -> T
 (defn walk-type-by [f t custom-walk]
-  (let [wlk #(f %)]
+  (let [wlk #(f %)
+        wlkv #(do
+                (assert (vector? %))
+                (mapv f %))]
     (or (custom-walk t)
         (case (:op t)
           (:F :Base :B) t
@@ -160,9 +163,12 @@
                                                  (update :upper wlk))
                                             bs))))
           :Fn (-> t
-                  (update :dom #(mapv wlk %))
+                  (update :dom wlkv)
                   (update :rng wlk))
-          :IFn (update t :methods #(mapv wlk %))
+          :IFn (update t :methods wlkv)
+          :PApp (-> t
+                    (update :poly wlk)
+                    (update :args wlkv))
           :Scope (update t :scope wlk)))))
 
 ; T Scope [[Int T -> T] Int T -> (U nil T)] -> T
@@ -336,6 +342,8 @@
            (if (= 1 (count methods))
              (first methods)
              (doall (list* 'IFn methods))))
+    :PApp (list* 'PApp (unparse-type (:poly t))
+                 (map unparse-type (:args t)))
     (assert nil (str "Cannot unparse type: " (pr-str t)))))
 
 (defn variance? [v]

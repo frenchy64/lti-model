@@ -1272,11 +1272,18 @@
   (is (= 'inc (tc-exp ? inc)))
   (is (= '(fn [a] a)
          (tc-exp ? (fn [a] a))))
-  (is (= '((fn [a] a) 1)
+  (is (= '((ann (fn [a] a)
+                [Int :-> Int])
+           1)
          (tc-exp ? (let [a 1] a))))
-  (is (= '[1 ((fn [a] a) 1)]
+  (is (= '[1 ((ann (fn [a] a)
+                   [Int :-> Int])
+              1)]
          (tc-exp ? [1 (let [a 1] a)])))
-  (is (= '[1 ((fn [a] ((fn [b] a) 2)) 1)]
+  (is (= '[1 ((ann (fn [a] ((fn [b] a)
+                            2))
+                   [Int :-> Int])
+              1)]
          (tc-exp ? [1 (let [a 1 b 2] a)])))
   (is (= '(ann ((fn [a] a) 1) Int)
          (tc-exp ? (ann (let [a 1] a) Int))))
@@ -1290,9 +1297,8 @@
          (tc-exp ? (ann (fn [a] (let [a 1] a))
                         (IFn [Int :-> Int]
                              [Nothing :-> Int])))))
-  ;TODO insert type arguments
-  #_
-  (is (= (tc-exp ? (map inc [1 2 3]))))
+  (is (= '((ann map (PApp (All [a b] [[a :-> b] (Seq a) :-> (Seq b)]) Int Int)) inc [1 2 3])
+         (tc-exp ? (map inc [1 2 3]))))
   )
 
 (comment

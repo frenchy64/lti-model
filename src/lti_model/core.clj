@@ -25,6 +25,7 @@
 ;     | (I t *)            ;intersections
 ;     | (Seq t)            ;sequences
 ;     | (Closure Env e)    ;delayed untyped functions
+;     | (PApp t t *)       ;instantiation of polymorphic types
 ; P ::=                    ; Prototypes
 ;       ?                  ;wildcard
 ;     | (IFn [P * :-> P]+) ;ordered intersection function types
@@ -70,7 +71,10 @@
        '{:op ':Union
          :types (t/Set T)}
        '{:op ':Intersection
-         :types (t/Set T)}))
+         :types (t/Set T)}
+       '{:op ':PApp
+         :poly T
+         :args (t/Vec T)}))
 
 #_
 (t/defalias P
@@ -353,7 +357,7 @@
 (declare promote-demote solve-app
          smallest-matching-super demote)
 
-; T P -> T
+; T P -> (U nil T)
 (defn match-dir
   "Returns smallest supertype of t that matches P if direction is :up.
    Returns largest subtype of t that matches P if direction is :down.
@@ -468,11 +472,10 @@
 
     :else nil))
 
-(defn smallest-matching-super [t P]
-  ;(prn "smallest-matching-super" (unparse-type t) (unparse-type P))
-  (match-dir :up t P))
-(defn largest-matching-sub [t P]
-  (match-dir :down t P))
+; T P -> (U nil T)
+(defn smallest-matching-super [t P] (match-dir :up t P))
+; T P -> (U nil T)
+(defn largest-matching-sub [t P] (match-dir :down t P))
 
 (defn expected-error [msg t P e]
   (throw (ex-info
@@ -974,7 +977,8 @@
          ((some-fn nil? map?) existing-c)]
    :post [(or (nil? %)
               (and (map? %)
-                   (u/Type? (:rng-t %))))]}
+                   (u/Type? (:rng-t %))
+                   (map? (:subst %))))]}
   ;(prn "solve-pmethod" (unparse-type m) (unparse-type P) (mapv unparse-type cargs))
   (when (= (count (:dom m))
            (count cargs))
@@ -996,9 +1000,8 @@
                 ;(prn "synth-res" (unparse-type synth-res))
                 (when-let [smret (smallest-matching-super synth-res P)]
                   {:rng-t smret
-                   :X X
-                   :c c
-                   :gs gs})))))))))
+                   :interface m
+                   :subst (substitution-for-constraint X c m)})))))))))
 
 (def ^:dynamic *closure-cache* nil)
 (def ^:dynamic *reduction-limit* 20)
@@ -1015,7 +1018,7 @@
 ; and actually use our suggested annotations.
 (defn suggested-annotation-for-closure [closure-cache cop]
   {:pre [(Closure? cop)]
-   :post [((some-fn nil? map?) %)]}
+   :post [(u/Type? %)]}
   (let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
     (if (contains? *currently-suggesting-closures* cop)
       -any ; probably in an infinite loop
@@ -1048,6 +1051,7 @@
           :else -any)))))
 
 (defn suggest-annotation [closure-cache t]
+  {:post [(u/Type? %)]}
   (let [sg #(suggest-annotation closure-cache %)]
     (case (:op t)
       ;TODO handle free type variables, do they imply a polymorphic annotation, or perhaps just upcast to Any?
@@ -1087,25 +1091,23 @@
          (every? u/Type? cargs)]
    :post [(or (nil? %)
               (and (map? %)
-                   (u/Type? (:rng-t %))))]}
+                   (u/Type? (:rng-t %))
+                   (u/Type? (:interface %))))]}
   ;(prn "solve-app" (:op cop))
   ;(prn "cop" (unparse-type cop))
   ;(prn "P" (unparse-type P))
   ;(prn "cargs" (mapv unparse-type cargs))
   (case (:op cop)
-    ;; FIXME what to do about instantiating intersections of polymorphic types?
     :Intersection (let [successes (keep #(solve-app P % cargs) (:types cop))
-                        ;; FIXME what to do about instantiating unions of polymorphic types?
-                        _ (assert (not-any? :c successes))
                         _ (when (empty? successes)
                             (throw (ex-info (str "Cannot invoke " (unparse-type cop))
                                             {type-error-kw true})))]
-                    {:rng-t (make-I (map :rng-t successes))})
+                    {:rng-t (make-I (map :rng-t successes))
+                     :interface (make-I (map :interface successes))})
     :Union (let [sols (map #(solve-app P % cargs) (:types cop))
-                 ;; FIXME what to do about instantiating unions of polymorphic types?
-                 _ (assert (not-any? :c sols))
                  rng-ts (map :rng-t sols)]
-             {:rng-t (make-U rng-ts)})
+             {:rng-t (make-U rng-ts)
+              :interface (make-I (map :interface sols))})
     :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
                           {type-error-kw true}))
     :Closure (let [_ (assert *closure-cache*)
@@ -1152,32 +1154,53 @@
                        (swap! update-in [cop :actual-rngs {:args cargs :ret P}]
                               (fn [actual-rngs]
                                 (conj (or actual-rngs #{}) actual-rng))))]
-               {:rng-t actual-rng})
-    :IFn (when-let [rng-t (some (fn [m]
-                                  {:pre [(Fn? m)]}
-                                  (when (= (count cargs)
-                                           (count (:dom m)))
-                                    (when (every? identity (map subtype? cargs (:dom m)))
-                                      (smallest-matching-super (:rng m) P))))
-                                (:methods cop))]
-           {:rng-t rng-t})
+               {:interface {:op :IFn
+                            :methods [{:op :Fn
+                                       :dom cargs
+                                       :rng actual-rng}]}
+                :rng-t actual-rng})
+    :IFn (some (fn [m]
+                 {:pre [(Fn? m)]}
+                 (when (= (count cargs)
+                          (count (:dom m)))
+                   (when (every? identity (map subtype? cargs (:dom m)))
+                     (when-let [rng-t (smallest-matching-super (:rng m) P)]
+                       {:rng-t rng-t
+                        :interface {:op :IFn
+                                    :methods [m]}}))))
+               (:methods cop))
     :Poly (let [gs (Poly-frees cop)
                 gs-names (map :name gs)
                 V #{}
                 X (set gs-names)
                 body (Poly-body cop gs)
+                pbounds (Poly-bounds cop gs)
+                pconstraints (Poly-constraints cop gs)
                 existing-c (intersect-constraints
                              (concat
                                (map #(delay-constraint V X (:lower %) (:upper %))
-                                    (Poly-constraints cop gs))
+                                    pconstraints)
                                (map (fn [{:keys [lower upper]}]
                                       (gen-constraint V X lower upper))
-                                    (Poly-bounds cop gs))))
+                                    pbounds)))
                 ;_ (prn "existing-c" (unparse-cset existing-c))
                 ]
             (case (:op body)
-              :IFn (let [sol (some #(solve-pmethod V X % P cargs gs existing-c) (:methods body))]
-                     sol)
+              :IFn (when-let [{:keys [rng-t interface subst]} (some #(solve-pmethod V X % P cargs gs existing-c) (:methods body))]
+                     (assert (Fn? interface))
+                     {:rng-t rng-t
+                      :interface {:op :PApp
+                                  :poly (Poly* (mapv :name gs)
+                                               {:op :IFn
+                                                :methods [interface]}
+                                               :original-names (mapv :original-name gs)
+                                               :constraints pconstraints
+                                               :bounds pbounds)
+                                  :args (mapv (fn [g-name]
+                                                {:pre [(symbol? g-name)]
+                                                 :post [(u/Type? %)]}
+                                                (get subst g-name))
+                                              (map :name gs))}})
               nil))))
 
 (declare check)
@@ -1310,8 +1333,18 @@
                        cargs (mapv u/ret-t rcargs)]
                    (if-let [sol (solve-app P cop cargs)]
                      ; TODO insert inferred type arguments
-                     (u/->Result (list* (u/ret-e rcop) (map u/ret-e rcargs))
-                                 (:rng-t sol))
+                     (let [eop (u/ret-e rcop)
+                           ; must resolve symbolic closures
+                           subt (suggest-annotation
+                                  *closure-cache*
+                                  (:interface sol))]
+                       (prn "eop" eop)
+                       (prn "interface" (unparse-type subt))
+                       (u/->Result (list* (if (= cop subt)
+                                            eop
+                                            (list 'ann eop (unparse-type subt)))
+                                          (map u/ret-e rcargs))
+                                   (:rng-t sol)))
                      (throw (ex-info (str "Could not apply function: "
                                           "\nFunction:\n\t"
                                           (indent-str-by "\t" (with-out-str (pprint (unparse-type cop))))

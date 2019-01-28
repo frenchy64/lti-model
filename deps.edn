@@ -1,0 +1,19 @@
+{:paths ["src"]
+ :deps {org.clojure/core.typed.analyzer.jvm {:git/url "https://github.com/clojure/core.typed.analyzer.jvm.git"
+                                             :sha "f33af6a8b20aee407a8b7a7ca52fe319b81cb9b7"}}
+ :aliases {:nREPL
+           {:extra-deps
+            {nrepl/nrepl {:mvn/version "0.4.5"}
+             cider/piggieback {:mvn/version "0.3.8"}}
+            :main-opts ["-m" "nrepl.cmdline"
+                        "--interactive"]}
+           :test
+           {:extra-paths ["test"]}
+           :runner
+           {:extra-deps {com.cognitect/test-runner
+                         {:git/url "https://github.com/cognitect-labs/test-runner"
+                          :sha "3cb0a9daf1cb746259dc8309b218f9211ad3b33b"}}
+            :main-opts ["-m" "cognitect.test-runner"
+                        "-r" ".*"
+                        ;"-d" "src/test/clojure"
+                        ]}}}

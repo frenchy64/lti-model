@@ -6,4 +6,4 @@ jobs:
        - image: circleci/clojure:lein-2.7.1
      steps:
        - checkout
-       - run: lein test
+       - run: ./script/test
