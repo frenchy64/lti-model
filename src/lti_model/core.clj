@@ -1332,7 +1332,6 @@
                        rcargs (mapv #(check -wild env %) args)
                        cargs (mapv u/ret-t rcargs)]
                    (if-let [sol (solve-app P cop cargs)]
-                     ; TODO insert inferred type arguments
                      (let [eop (u/ret-e rcop)
                            ; must resolve symbolic closures
                            subt (suggest-annotation

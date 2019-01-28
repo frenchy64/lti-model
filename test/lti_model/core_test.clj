@@ -1267,6 +1267,7 @@
          (tc ? (app2 +' 1 (ann 2 Num)))))
 )
 
+#_
 (deftest elaboration-test
   (is (= 1 (tc-exp ? 1)))
   (is (= 'inc (tc-exp ? inc)))
