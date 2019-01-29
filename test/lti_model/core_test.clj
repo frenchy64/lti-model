@@ -18,6 +18,13 @@
      (do (tc ~P ~e)
          false)))
 
+(defmacro spit-pprint [out e]
+  `(binding [*print-length* nil
+             *print-level* nil]
+     (spit ~out
+           (with-out-str
+             (pprint ~e)))))
+
 ; dummy to evaluate code in this ns
 (defmacro ann [e t] e)
 

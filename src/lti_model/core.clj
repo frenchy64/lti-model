@@ -183,11 +183,13 @@
     (unparse-type t)))
 
 (def ^:dynamic *unparse-closure-by-id* nil)
+(def ^:dynamic *unparse-disallow-wildcard* nil)
 
 ; T -> Any
 (defn unparse-type [t]
   (case (:op t)
-    :Wild '?
+    :Wild (do (assert (not *unparse-disallow-wildcard*))
+              '?)
     :Closure (if *unparse-closure-by-id*
                (list ::ClosureByID (:id t))
                (list 'Closure (unparse-env (:env t)) (:expr t)))
@@ -1024,32 +1026,50 @@
 (declare suggest-annotation)
 
 (def ^:dynamic *currently-suggesting-closures* #{})
-(def ^:dynamic *verbose-closure-suggestion* nil)
 
-;returns the full elaborated type for closure id cop if for-expected is nil.
-; if for-expected is a map, returns the actual range corresponding to the
-; argument types.
-(defn elaborated-closure-type [closure-cache cop for-expected]
+(declare elaborated-type)
+
+;returns the full elaborated type for closure id
+(defn elaborated-closure-type [closure-cache cop]
   {:pre [(map? closure-cache)
-         (symbol? cop)
-         ((some-fn nil? map?) for-expected)]
+         (symbol? cop)]
    :post [(u/Type? %)]}
   (let [{:keys [expecteds actual-rngs] :as entry} (get closure-cache cop)
+        ; nil `entry` implies `(IFn)` annotation (dead code), because the symbolic closure
+        ; was never symbolically invoked
+        _ (assert ((some-fn nil? map?) entry))
         fn-type-from-expected (fn [{:keys [args] :as expected}]
                                 (let [actuals (get actual-rngs expected)
                                       _ (assert (seq actuals))]
                                   {:op :Fn
                                    :dom args
                                    :rng (make-U actuals)}))]
-    (if for-expected
-      ; returns the result
-      (do (assert entry)
-          (:rng (fn-type-from-expected for-expected)))
-      {:op :IFn
-       :methods (into []
-                      (comp (map (comp fn-type-from-expected key))
-                            (distinct))
-                      expecteds)})))
+    {:op :IFn
+     :methods (into []
+                    (comp ; resolve an arity for this symbolic closure
+                          (map (comp fn-type-from-expected key))
+                          ; recursively resolve symbolic closures referenced by this arity
+                          (map #(elaborated-type closure-cache %))
+                          ; now resolve duplicates, crucially after all symbolic closures are resolved.
+                          (distinct))
+                    expecteds)}))
+
+(def ^:dynamic *elaborated-type-depth* 0)
+
+(defn elaborated-type [closure-cache t]
+  {:pre [(map? closure-cache)]
+   :post [(u/Type? %)]}
+  (let [elab (fn [t]
+               (if (= 0 (mod *elaborated-type-depth* 75))
+                 (let [bfn (bound-fn [closure-cache e]
+                             (elaborated-type closure-cache t))]
+                   @(future
+                      (bfn closure-cache t)))
+                 (elaborated-type closure-cache t)))]
+    (binding [*elaborated-type-depth* (inc *elaborated-type-depth*)]
+      (case (:op t)
+        :Closure (elaborated-closure-type closure-cache (:id t))
+        (walk-type elab t)))))
 
 ; The :Closure case in `subtype?` might cause irrelevant side effects
 ; to the closure-cache, so it might cause us to give bad suggestions sometimes.
@@ -1067,8 +1087,6 @@
       (binding [*currently-suggesting-closures* (conj *currently-suggesting-closures* cop)]
         ;(prn "expecteds" cop entry closure-cache)
         (cond
-          *verbose-closure-suggestion* (elaborated-closure-type closure-cache cop nil)
-
           ; likely this is a good annotation for arguments
           (= (count expecteds) 1)
           (let [{:keys [args] :as expected} (key (first expecteds))
@@ -1286,58 +1304,70 @@
 
 (declare merge-enclosing-fn-cases)
 
+(def ^:dynamic *resolve-symbolic-closures-depth* 0)
+
 ; dirty-tree-walk expression e and resolve symbolic closures
 (defn resolve-symbolic-closures [closure-cache e]
   {:pre [(map? closure-cache)]}
-  ;postwalk because suggested-annotation-for-closure already traverses its result
-  ; to resolve closures, and so we can also simplify EnclosingFnCase types
-  (walk/postwalk (fn [e]
-                   (cond
-                     ;expand symbolic closure bodies
-                     (and (seq? e)
-                          (= ::ClosureFormsByID (first e))
-                          (= 2 (count e)))
-                     (let [{:keys [ids original-form] :as opt} (second e)
-                           _ (assert (map? opt))
-                           ffrms (map #(get-in closure-cache [% :forms]) ids)]
-                       (if (every? nil? ffrms)
-                         original-form
-                         (let [_ (assert (every? (every-pred vector? seq) ffrms)
-                                         (vec ffrms))
-                               frms (mapv #(resolve-symbolic-closures closure-cache %)
-                                          (apply concat ffrms))]
-                           (merge-enclosing-fn-cases frms))))
+  (let [resolve-symbolic-closures 
+        (fn [closure-cache e]
+          (if (= 0 (mod *resolve-symbolic-closures-depth* 100))
+            (let [bfn (bound-fn [closure-cache e]
+                        (resolve-symbolic-closures closure-cache e))]
+              @(future
+                 (bfn closure-cache e)))
+            (resolve-symbolic-closures closure-cache e)))]
+    (binding [*resolve-symbolic-closures-depth* (inc *resolve-symbolic-closures-depth*)]
+      ;postwalk because suggested-annotation-for-closure already traverses its result
+      ; to resolve closures, and so we can also simplify EnclosingFnCase types
+      (walk/postwalk (fn [e]
+                       (cond
+                         ;expand symbolic closure bodies
+                         (and (seq? e)
+                              (= ::ClosureFormsByID (first e))
+                              (= 2 (count e)))
+                         (let [{:keys [ids original-form] :as opt} (second e)
+                               _ (assert (map? opt))
+                               ffrms (map #(get-in closure-cache [% :forms]) ids)]
+                           (if (every? nil? ffrms)
+                             ;dead code, equivalent to checking the function as Any (or maybe `(IFn)`?)
+                             original-form
+                             (let [_ (assert (every? (every-pred vector? seq) ffrms)
+                                             (vec ffrms))
+                                   frms (mapv #(resolve-symbolic-closures closure-cache %)
+                                              (apply concat ffrms))]
+                               (merge-enclosing-fn-cases frms))))
 
-                     ;expand symbolic closure types
-                     (and (seq? e)
-                          (= ::ClosureByID (first e))
-                          (symbol? (second e)))
-                     (let [[_ id for-expected] e
-                           _ (assert (symbol? id))
-                           ; resolve this closure type
-                           t (elaborated-closure-type closure-cache id for-expected)
-                           ; convert back to syntax
-                           e (binding [*unparse-closure-by-id* true]
-                               (unparse-type t))]
-                       ; recur
-                       (resolve-symbolic-closures closure-cache e))
+                         ;expand symbolic closure types
+                         (and (seq? e)
+                              (= ::ClosureByID (first e))
+                              (symbol? (second e)))
+                         (let [[_ id] e
+                               _ (assert (symbol? id))
+                               ; resolve this closure type
+                               t (elaborated-closure-type closure-cache id)
+                               ; convert back to syntax
+                               e (binding [*unparse-closure-by-id* true]
+                                   (unparse-type t))]
+                           ; recur
+                           (resolve-symbolic-closures closure-cache e))
 
-                     ;simplify EnclosingFnCase types
-                     (and *simplify-EnclosingFnCase*
-                          (seq? e)
-                          (= 'EnclosingFnCase (first e))
-                          (integer? (second e)))
-                     (let [[_ _ & fn-cases] e
-                           _ (assert (even? (count fn-cases)))
-                           cases-paired (partition 2 fn-cases)]
-                       ; rhs never changes
-                       (if (apply = (map second cases-paired))
-                         (second fn-cases)
-                         ;TODO group cases keyed via unions
-                         e))
+                         ;simplify EnclosingFnCase types
+                         (and *simplify-EnclosingFnCase*
+                              (seq? e)
+                              (= 'EnclosingFnCase (first e))
+                              (integer? (second e)))
+                         (let [[_ _ & fn-cases] e
+                               _ (assert (even? (count fn-cases)))
+                               cases-paired (partition 2 fn-cases)]
+                           ; rhs never changes
+                           (if (apply = (map second cases-paired))
+                             (second fn-cases)
+                             ;TODO group cases keyed via unions
+                             e))
 
-                     :else e))
-                 e))
+                         :else e))
+                     e))))
 
 (defn count-papps [t]
   {:pre [(u/Type? t)]
@@ -1359,10 +1389,13 @@
                   (recur (inc n)
                          (pop stack)
                          (list 'EnclosingFnCase n
-                               (unparse-type (peek stack))
+                               (binding [*unparse-disallow-wildcard* true]
+                                 (unparse-type (peek stack)))
                                t))
                   t))]
-    (wrap1 0 *enclosing-fn-stack* (unparse-type t))))
+    (wrap1 0 *enclosing-fn-stack*
+           (binding [*unparse-disallow-wildcard* true]
+             (unparse-type t)))))
 
 (defn ann-form? [e]
   (and (seq? e)
@@ -1380,7 +1413,14 @@
        (= (count e) 2)
        (map? (second e))))
 
-; (Seqable E) -> E
+; (Seqable Any) -> Any
+; dirty-tree-walk to merge EnclosingFnCase forms in arbitrary expressions/types
+; depends on: 
+; 1. (list 'ann e1 e2) only ever is an ann form
+;    - local bindings cannot shadow first-order usages of 'ann
+;    - I don't think it can appear in a type
+; 2. (list ::ClosureFormsByID {:original-form f, :ids [syms ...]}) only ever is a placeholder for a symbolic closure form
+; 3. (list 'EnclosingFnCase i c1-q c1-a, c2-q c2-a ...) is always an EnclosingFnCase type
 (defn merge-enclosing-fn-cases [es]
   {:pre [(seq es)]}
   (let [add-ann-left (fn [e1 e2]
@@ -1524,9 +1564,9 @@
                                                                                    (conj *enclosing-fn-stack*
                                                                                          ; erase wildcards to prevent them appearing
                                                                                          ; in elaboration
-                                                                                         (-> m
-                                                                                             (assoc :dom ddom)
-                                                                                             (update :rng #(promote #{} %))))]
+                                                                                         ; eg. [Int -> ?] => [Int -> Any]
+                                                                                         ; eg. [? -> Int] => [Nothing -> Int]
+                                                                                         (promote #{} m))]
                                                                            (check (:rng m) env body))
                                                                     rng (u/ret-t rrng)]
                                                                 (u/->Result

@@ -1,0 +1,424 @@
+(((ann
+   (fn
+    [pair]
+    ((ann
+      (fn
+       [f1]
+       ((ann
+         (fn
+          [f2]
+          ((ann
+            (fn
+             [f3]
+             ((ann
+               (fn
+                [f4]
+                (ann
+                 (fn [z] ((f4 (ann (fn [x] x) (IFn))) z))
+                 [[(IFn)
+                   :->
+                   [(IFn)
+                    :->
+                    [Int
+                     :->
+                     [Int
+                      :->
+                      [Int
+                       :->
+                       [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+                  :->
+                  [Int
+                   :->
+                   [Int
+                    :->
+                    [Int
+                     :->
+                     [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]))
+               [[(IFn)
+                 :->
+                 [[(IFn)
+                   :->
+                   [(IFn)
+                    :->
+                    [Int
+                     :->
+                     [Int
+                      :->
+                      [Int
+                       :->
+                       [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+                  :->
+                  [Int
+                   :->
+                   [Int
+                    :->
+                    [Int
+                     :->
+                     [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+                :->
+                [[(IFn)
+                  :->
+                  [(IFn)
+                   :->
+                   [Int
+                    :->
+                    [Int
+                     :->
+                     [Int
+                      :->
+                      [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+                 :->
+                 [Int
+                  :->
+                  [Int
+                   :->
+                   [Int
+                    :->
+                    [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+              (ann
+               (fn [x] (f3 (f3 x)))
+               [(IFn)
+                :->
+                [[(IFn)
+                  :->
+                  [(IFn)
+                   :->
+                   [Int
+                    :->
+                    [Int
+                     :->
+                     [Int
+                      :->
+                      [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+                 :->
+                 [Int
+                  :->
+                  [Int
+                   :->
+                   [Int
+                    :->
+                    [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])))
+            [(IFn
+              [(IFn) :-> (IFn)]
+              [(IFn)
+               :->
+               [[(IFn)
+                 :->
+                 [(IFn)
+                  :->
+                  [Int
+                   :->
+                   [Int
+                    :->
+                    [Int
+                     :->
+                     [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+                :->
+                [Int
+                 :->
+                 [Int
+                  :->
+                  [Int
+                   :->
+                   [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+             :->
+             [[(IFn)
+               :->
+               [(IFn)
+                :->
+                [Int
+                 :->
+                 [Int
+                  :->
+                  [Int
+                   :->
+                   [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+              :->
+              [Int
+               :->
+               [Int
+                :->
+                [Int
+                 :->
+                 [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+           (ann
+            (fn [x] (f2 (f2 x)))
+            (IFn
+             [(IFn) :-> (IFn)]
+             [(IFn)
+              :->
+              [[(IFn)
+                :->
+                [(IFn)
+                 :->
+                 [Int
+                  :->
+                  [Int
+                   :->
+                   [Int
+                    :->
+                    [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+               :->
+               [Int
+                :->
+                [Int
+                 :->
+                 [Int
+                  :->
+                  [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]))))
+         [(IFn
+           [(IFn) :-> (IFn)]
+           [(IFn) :-> (IFn)]
+           [(IFn) :-> (IFn)]
+           [(IFn)
+            :->
+            [[(IFn)
+              :->
+              [(IFn)
+               :->
+               [Int
+                :->
+                [Int
+                 :->
+                 [Int
+                  :->
+                  [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+             :->
+             [Int
+              :->
+              [Int
+               :->
+               [Int
+                :->
+                [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+          :->
+          [[(IFn)
+            :->
+            [(IFn)
+             :->
+             [Int
+              :->
+              [Int
+               :->
+               [Int
+                :->
+                [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+           :->
+           [Int
+            :->
+            [Int
+             :->
+             [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+        (ann
+         (fn [x] (f1 (f1 x)))
+         (IFn
+          [(IFn) :-> (IFn)]
+          [(IFn) :-> (IFn)]
+          [(IFn) :-> (IFn)]
+          [(IFn)
+           :->
+           [[(IFn)
+             :->
+             [(IFn)
+              :->
+              [Int
+               :->
+               [Int
+                :->
+                [Int
+                 :->
+                 [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+            :->
+            [Int
+             :->
+             [Int
+              :->
+              [Int
+               :->
+               [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]))))
+      [(IFn
+        [(IFn) :-> (IFn)]
+        [(IFn) :-> (IFn)]
+        [(IFn) :-> (IFn)]
+        [(IFn) :-> (IFn)]
+        [(IFn) :-> (IFn)]
+        [(IFn) :-> (IFn)]
+        [(IFn) :-> (IFn)]
+        [(IFn)
+         :->
+         [[(IFn)
+           :->
+           [(IFn)
+            :->
+            [Int
+             :->
+             [Int
+              :->
+              [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+          :->
+          [Int
+           :->
+           [Int
+            :->
+            [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+       :->
+       [[(IFn)
+         :->
+         [(IFn)
+          :->
+          [Int
+           :->
+           [Int
+            :->
+            [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+        :->
+        [Int
+         :->
+         [Int
+          :->
+          [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+     (ann
+      (fn [x] (pair x))
+      (IFn
+       [(IFn) :-> (IFn)]
+       [(IFn) :-> (IFn)]
+       [(IFn) :-> (IFn)]
+       [(IFn) :-> (IFn)]
+       [(IFn) :-> (IFn)]
+       [(IFn) :-> (IFn)]
+       [(IFn) :-> (IFn)]
+       [(IFn)
+        :->
+        [[(IFn)
+          :->
+          [(IFn)
+           :->
+           [Int
+            :->
+            [Int
+             :->
+             [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+         :->
+         [Int
+          :->
+          [Int
+           :->
+           [Int
+            :->
+            [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]))))
+   [(IFn
+     [(IFn) :-> (IFn)]
+     [(IFn) :-> (IFn)]
+     [(IFn) :-> (IFn)]
+     [(IFn) :-> (IFn)]
+     [(IFn) :-> (IFn)]
+     [(IFn) :-> (IFn)]
+     [(IFn) :-> (IFn)]
+     [(IFn)
+      :->
+      [[(IFn)
+        :->
+        [(IFn)
+         :->
+         [Int
+          :->
+          [Int
+           :->
+           [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+       :->
+       [Int
+        :->
+        [Int
+         :->
+         [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+    :->
+    [[(IFn)
+      :->
+      [(IFn)
+       :->
+       [Int
+        :->
+        [Int
+         :->
+         [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+     :->
+     [Int
+      :->
+      [Int
+       :->
+       [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])
+  (ann
+   (fn
+    [x]
+    (ann
+     (fn [f] ((f x) x))
+     (EnclosingFnCase
+      0
+      [(IFn) :-> Any]
+      (IFn)
+      [(IFn) :-> Any]
+      [[(IFn)
+        :->
+        [(IFn)
+         :->
+         [Int
+          :->
+          [Int
+           :->
+           [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+       :->
+       [Int
+        :->
+        [Int
+         :->
+         [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]])))
+   (IFn
+    [(IFn) :-> (IFn)]
+    [(IFn) :-> (IFn)]
+    [(IFn) :-> (IFn)]
+    [(IFn) :-> (IFn)]
+    [(IFn) :-> (IFn)]
+    [(IFn) :-> (IFn)]
+    [(IFn) :-> (IFn)]
+    [(IFn)
+     :->
+     [[(IFn)
+       :->
+       [(IFn)
+        :->
+        [Int
+         :->
+         [Int
+          :->
+          [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]
+      :->
+      [Int
+       :->
+       [Int
+        :->
+        [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]])))
+ (ann
+  (fn
+   [x]
+   (ann
+    (fn
+     [y]
+     (fn
+      [x']
+      (fn [y'] (fn [x] (fn [y] (fn [x'] (fn [y'] (fn [i] i))))))))
+    [(IFn)
+     :->
+     [Int
+      :->
+      [Int
+       :->
+       [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]))
+  [(IFn)
+   :->
+   [(IFn)
+    :->
+    [Int
+     :->
+     [Int
+      :->
+      [Int :-> [Int :-> [Int :-> [Int :-> [Int :-> Int]]]]]]]]]))

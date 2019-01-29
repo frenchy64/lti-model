@@ -1,0 +1,43 @@
+(((ann
+   (fn
+    [pair]
+    ((ann
+      (fn
+       [p1]
+       ((ann
+         (fn
+          [zero]
+          (ann
+           (fn [sel] ((p1 zero) sel))
+           [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]))
+         [(IFn)
+          :->
+          [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]])
+        (ann (fn [x] x) (IFn))))
+      [[(IFn)
+        :->
+        [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]]
+       :->
+       [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]])
+     (ann
+      (fn [x] (pair x))
+      [(IFn)
+       :->
+       [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]])))
+   [[(IFn)
+     :->
+     [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]]
+    :->
+    [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]])
+  (ann
+   (fn
+    [x]
+    (ann
+     (fn [sel] ((sel x) x))
+     [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]))
+   [(IFn)
+    :->
+    [[(IFn) :-> [(IFn) :-> [Int :-> Int]]] :-> [Int :-> Int]]]))
+ (ann
+  (fn [fst] (ann (fn [snd] fst) [(IFn) :-> [Int :-> Int]]))
+  [(IFn) :-> [(IFn) :-> [Int :-> Int]]]))
