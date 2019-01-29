@@ -231,13 +231,9 @@
                (f 1)))))
   ;recursive function type
   (is (= 'Int
-         (binding [*disable-elaboration* true]
-           (tc ?
-               (let [f (fn [x] x)]
-                 ((f f) 1))))))
-  (is (tc-err ?
-              (let [f (fn [x] x)]
-                ((f f) 1))))
+         (tc ?
+             (let [f (fn [x] x)]
+               ((f f) 1)))))
   ; not exponential like let-polymorphism: https://cs.stackexchange.com/questions/6617/concise-example-of-exponential-cost-of-ml-type-inference
 ; # let pair x f = f x x;;
 ; # let f1 x = pair x in
@@ -246,35 +242,30 @@
 ;   fun z -> f3 (fun x -> x) z;;
   (is
     (= 'Int
-       (binding [*disable-elaboration* true]
-         (tc ?
-             ((let [pair (fn [f] ; flipped f and x
-                           (fn [x]
-                             ((f x) x)))]
-                (let [f1 (fn [x] (pair x))]
-                  (let [f2 (fn [x] (f1 (f1 x)))]
-                    (let [f3 (fn [x] (f2 (f2 x)))]
-                      (let [f4 (fn [x] (f3 (f3 x)))]
-                        (fn [z] ((f4 (fn [x] x)) z)))))))
-              ;this is apparently given a recursive type, (Rec [a] [a -> ?]).
-              (fn [x]
-                (fn [y]
-                  (fn [x']
-                    (fn [y']
-                      (fn [x]
-                        (fn [y]
-                          (fn [x']
-                            (fn [y']
-                              ;return 1
-                              1)))))))))))))
-  ; smallest case of recursive function type, without elaborating
+       (tc ?
+           ((let [pair (fn [f] ; flipped f and x
+                         (fn [x]
+                           ((f x) x)))]
+              (let [f1 (fn [x] (pair x))]
+                (let [f2 (fn [x] (f1 (f1 x)))]
+                  (let [f3 (fn [x] (f2 (f2 x)))]
+                    (let [f4 (fn [x] (f3 (f3 x)))]
+                      (fn [z] ((f4 (fn [x] x)) z)))))))
+            ;this is apparently given a recursive type, (Rec [a] [a -> ?]).
+            (fn [x]
+              (fn [y]
+                (fn [x']
+                  (fn [y']
+                    (fn [x]
+                      (fn [y]
+                        (fn [x']
+                          (fn [y']
+                            ;return 1
+                            1))))))))))))
+  ; smallest case of recursive function type
   (is (= '(Closure {} (fn [f] f))
-         (binding [*disable-elaboration* true]
-           (tc ? (let [f (fn [f] f)]
-                   (f f))))))
-  ; smallest case of recursive function type, with elaboration (fails)
-  (is (tc-err ? (let [f (fn [f] f)]
-                  (f f))))
+         (tc ? (let [f (fn [f] f)]
+                 (f f)))))
   ; fails because of the recursive function type
   (is
     (tc-err ?
@@ -1399,6 +1390,35 @@
          (tc-exp ? (ann (fn [a] (let [a 1 b 2] a))
                         (IFn [Int :-> Int]
                              [Str :-> Int])))))
+  ; smallest case of recursive function type, with elaboration
+  (is (tc-exp ? (let [f (fn [f] f)]
+                  (f f))))
+  (is (=
+       (tc-exp ?
+               (let [f (fn [x] x)]
+                 ((f f) 1)))))
+  ; FIXME does this type check in the internal language?
+  (is
+       (tc-exp ?
+           ((let [pair (fn [f] ; flipped f and x
+                         (fn [x]
+                           ((f x) x)))]
+              (let [f1 (fn [x] (pair x))]
+                (let [f2 (fn [x] (f1 (f1 x)))]
+                  (let [f3 (fn [x] (f2 (f2 x)))]
+                    (let [f4 (fn [x] (f3 (f3 x)))]
+                      (fn [z] ((f4 (fn [x] x)) z)))))))
+            ;this is apparently given a recursive type, (Rec [a] [a -> ?]).
+            (fn [x]
+              (fn [y]
+                (fn [x']
+                  (fn [y']
+                    (fn [x]
+                      (fn [y]
+                        (fn [x']
+                          (fn [y']
+                            ;return 1
+                            1)))))))))))
   (is (= '((ann map (PApp (All [a b] [[a :-> b] (Seq a) :-> (Seq b)]) Int Int)) inc [1 2 3])
          (tc-exp ? (map inc [1 2 3]))))
   )

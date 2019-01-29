@@ -119,6 +119,8 @@
                          {:op :B
                           :index outer}
                          t)
+                    :Mu (-> t
+                            (update :type nt))
                     :Poly (-> t
                               (update :type nt)
                               (update :constraints (fn [cs]
@@ -197,6 +199,8 @@
                     :Union (make-U (map rp (:types t)))
                     :Intersection (make-I (map rp (:types t)))
                     :Seq (update t :type rp)
+                    :Mu (-> t
+                            (update :type rp))
                     :Poly (-> t
                               (update :type rp)
                               (update :constraints (fn [cs]

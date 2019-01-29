@@ -1038,7 +1038,7 @@
 
 (declare suggest-annotation)
 
-(def ^:dynamic *currently-elaborating-closures* #{})
+(def ^:dynamic *currently-elaborating-closures* {})
 
 (declare elaborated-type)
 
@@ -1056,29 +1056,37 @@
         ; nil `entry` implies `(IFn)` annotation (dead code), because the symbolic closure
         ; was never symbolically invoked
         _ (assert ((some-fn nil? map?) entry))
+        ; flag is true if this type should be recursive
+        this-flag (atom nil) 
+        this-rec-sym (gensym "rec")
         fn-type-from-expected (fn [{:keys [args] :as expected}]
                                 (let [actuals (get actual-rngs expected)
                                       _ (assert (seq actuals))
                                       t {:op :Fn
                                          :dom args
                                          :rng (make-U actuals)}]
-                                  (when (contains? *currently-elaborating-closures* cop)
-                                    (throw (ex-info (str "Cannot assign recursive type to symbolic closure with id " cop
-                                                         "\n"
-                                                         (binding [*unparse-closure-by-id* true]
-                                                           (unparse-type t)))
-                                                    {type-error-kw true})))
-                                  t))
+                                  (cond
+                                    (*currently-elaborating-closures* cop)
+                                    (let [{:keys [flag rec-sym]} (*currently-elaborating-closures* cop)
+                                          _ (reset! flag true)]
+                                      {:op :F :name rec-sym})
+
+                                    :else (binding [*currently-elaborating-closures*
+                                                      (assoc *currently-elaborating-closures*
+                                                             cop
+                                                             {:rec-sym this-rec-sym
+                                                              :flag this-flag})]
+                                              (elaborated-type closure-cache t)))))
         t {:op :IFn
            :methods (into []
                           (comp ; resolve an arity for this symbolic closure
                                 (map (comp fn-type-from-expected key))
-                                ; recursively resolve symbolic closures referenced by this arity
-                                (map #(binding [*currently-elaborating-closures* (conj *currently-elaborating-closures* cop)]
-                                        (elaborated-type closure-cache %)))
                                 ; now resolve duplicates, crucially after all symbolic closures are resolved.
                                 (distinct))
-                          expecteds)}]
+                          expecteds)}
+        t (cond
+            @this-flag (Mu* this-rec-sym t)
+            :else t)]
     ;(prn "computed" cop)
     t))
 
