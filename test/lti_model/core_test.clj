@@ -18,12 +18,15 @@
      (do (tc ~P ~e)
          false)))
 
+(defn pprint' [e]
+  (binding [*print-length* nil
+            *print-level* nil]
+    (pprint e)))
+
 (defmacro spit-pprint [out e]
-  `(binding [*print-length* nil
-             *print-level* nil]
-     (spit ~out
-           (with-out-str
-             (pprint ~e)))))
+  `(spit ~out
+         (with-out-str
+           (pprint' ~e))))
 
 ; dummy to evaluate code in this ns
 (defmacro ann [e t] e)
@@ -1391,10 +1394,21 @@
   ; smallest case of recursive function type, with elaboration
   (is (tc-exp ? (let [f (fn [f] f)]
                   (f f))))
-  (is (=
-       (tc-exp ?
-               (let [f (fn [x] x)]
-                 ((f f) 1)))))
+  ; nested recursive function types (but references are not nested)
+  (is (tc-exp ? (let [f (fn [f] f)
+                      g (fn [g] g)]
+                  ((f f) (g g)))))
+  ; interestingly nested recursive types (like `(Rec [x] [:-> (Rec [y] [x -> y])])`)
+  (is (tc-exp ? (let [f (fn [f]
+                          (fn [g]
+                            (f g)))
+                      g (fn [g] g)]
+                  ((f f) f))))
+  ; recursive function type intersected with [Int -> Int]
+  ; Note that [Int -> Int] is part of the recursive type. Is this correct?
+  (is (tc-exp ?
+              (let [f (fn [x] x)]
+                ((f f) 1))))
   ; FIXME does this type check in the internal language?
   (is
        (tc-exp ?
