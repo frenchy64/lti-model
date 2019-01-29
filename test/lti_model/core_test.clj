@@ -266,9 +266,9 @@
   (is (= '(Closure {} (fn [f] f))
          (tc ? (let [f (fn [f] f)]
                  (f f)))))
-  ; fails because of the recursive function type
-  (is
-    (tc-err ?
+  ; features a recursive type
+  (is (= 'Int
+         (tc ?
             ((let [pair (fn [f] ; flipped f and x
                           (fn [x]
                             ((f x) x)))]
@@ -287,7 +287,7 @@
                          (fn [x']
                            (fn [y']
                              ;return 1
-                             1)))))))))))
+                             1))))))))))))
   ; exponential growth in size of printed type
   (is
     (= (read-string (slurp "huge_type.edn"))
@@ -473,7 +473,6 @@
   ;checks (x4)
   (is
     ;slow
-    (binding [*disable-elaboration* true]
      (tc Any
          (let [pair (fn [x y]
                       (fn [z]
@@ -482,7 +481,7 @@
            (let [x2 #(x1 (x1 %))]
            (let [x3 #(x2 (x2 %))]
            (let [x4 #(x3 (x3 %))]
-             (x4 1)))))))))
+             (x4 1))))))))
   ;checks (x4 with 9 fst's)
   (is
     ;FIXME slow but unsure if it will ever return!
@@ -1224,7 +1223,6 @@
                   (let [x3 (fn [y] (x2 (x2 y)))]
                     (x3 (fn [x] x)))))))))
   (is ((juxt last symbol-count)
-       (binding [*disable-elaboration* true] ;FIXME slow! unsure if elaborates
         (tc ?
             (let [P (fn [x]
                       (fn [z]
@@ -1233,7 +1231,7 @@
                 (let [x2 (fn [y] (x1 (x1 y)))]
                   (let [x3 (fn [y] (x2 (x2 y)))]
                     (let [x4 (fn [y] (x3 (x3 y)))]
-                      (x4 (fn [x] x)))))))))))
+                      (x4 (fn [x] x))))))))))
   (is ((juxt last symbol-count)
        (binding [*disable-elaboration* true] ;FIXME slow! unsure if elaborates
         (tc ?
