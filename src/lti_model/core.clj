@@ -126,8 +126,8 @@
 ; T Scope -> T
 (defn instantiate [image t]
   {:pre [(= :Scope (:op t))
-         (:op image)]
-   :post [(:op %)]}
+         (u/Type? image)]
+   :post [(u/Type? %)]}
   (u/instantiate-by image t
                     (fn [replace outer t]
                       (case (:op t)
@@ -141,6 +141,9 @@
 ; Poly (Seqable Type) -> Type
 (defn Poly-body [p images]
   (u/Poly-body-by p images instantiate-all))
+; Sym Mu -> Type
+(defn Mu-body [sym p]
+  (u/Mu-body-by sym p instantiate))
 
 (defn Poly-constraints [p images]
   {:pre [(= :Poly (:op p))
@@ -162,12 +165,15 @@
 
 (defn Poly* [syms t & args]
   (apply u/Poly*-by syms t abstract-all args))
+(defn Mu* [sym t & args]
+  (apply u/Mu*-by sym t abstract args))
 
 ; Any -> T
 (defn parse-type [t]
   (cond
     ('#{?} t) -wild
     :else (u/parse-type-by t {:Poly* Poly*
+                              :Mu* Mu*
                               :parse-type parse-type})))
 
 (declare unparse-type)
@@ -201,6 +207,7 @@
                         :Poly-body Poly-body
                         :Poly-constraints Poly-constraints
                         :Poly-bounds Poly-bounds
+                        :Mu-body Mu-body
                         :unparse-type unparse-type})))
 
 (declare fv-variances)
@@ -690,11 +697,14 @@
 
 (defn subst [sb t]
   {:pre [(map? sb)
-         (:op t)]
-   :post [(:op t)]}
-  (->> t
-       (abstract-all (vec (keys sb)))
-       (instantiate-all (vec (vals sb)))))
+         (u/Type? t)]
+   :post [(u/Type? %)]}
+  (u/subst-by sb t {:abstract-all abstract-all
+                    :instantiate-all instantiate-all}))
+
+(defn unfold [m]
+  (u/unfold-by m {:Mu-body Mu-body
+                  :subst subst}))
 
 (defn promote [V t]
   (promote-demote :up V t))

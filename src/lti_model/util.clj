@@ -46,6 +46,14 @@
            :original-name s})
         (:syms p)))
 
+; Mu -> '{:op ':F}
+(defn Mu-free [p]
+  {:pre [(= :Mu (:op p))]}
+  (let [s (:sym p)]
+    (assert (symbol? s))
+    {:op :F :name (with-meta (gensym s) {:original-name s})
+     :original-name s}))
+
 (def -Int {:op :Base :name 'Int})
 (def -Str {:op :Base :name 'Str})
 (def -Num {:op :Base :name 'Num})
@@ -174,9 +182,9 @@
 
 ; T Scope [[Int T -> T] Int T -> (U nil T)] -> T
 (defn instantiate-by [image t f]
-  {:pre [(= :Scope (:op t))
-         (:op image)]
-   :post [(:op %)]}
+  {:pre [(Type? image)
+         (= :Scope (:op t))]
+   :post [(Type? %)]}
   (letfn [; Integer T -> T
           (replace [outer t]
             {:pre [(integer? outer)]
@@ -225,6 +233,29 @@
    :post [(:op %)]}
   (instantiate-all-fn images (:type p)))
 
+; F Mu [T Scope -> T] -> Type
+(defn Mu-body-by [image p instantiate-fn]
+  {:pre [(Type? image)
+         (= :Mu (:op p))]
+   :post [(Type? %)]}
+  (instantiate-fn image (:type p)))
+
+(defn subst-by [sb t {:keys [abstract-all instantiate-all]}]
+  {:pre [(map? sb)
+         (Type? t)]
+   :post [(Type? %)]}
+  (->> t
+       (abstract-all (vec (keys sb)))
+       (instantiate-all (vec (vals sb)))))
+
+; Mu -> Type
+(defn unfold-by [m {:keys [Mu-body subst]}]
+  {:pre [(= :Mu (:op m))]
+   :post [(Type? %)]}
+  (let [sym (Mu-free m)
+        body (Mu-body sym m)]
+    (subst {(:name sym) m} body)))
+
 ; (Seqable Sym) Type -> Poly
 (defn Poly*-by [syms t abstract-all-fn & {:keys [constraints original-names bounds]}]
   {:pre [(every? symbol? syms)
@@ -257,9 +288,19 @@
      :constraints constraints
      :type ab}))
 
+; Sym Type [Sym Scope -> Type] -> Type
+(defn Mu*-by [sym t abstract-fn & {:keys [original-name]}]
+  {:pre [(symbol? sym)
+         (Type? t)
+         ((some-fn nil? symbol?) original-name)]}
+  (let [ab (abstract-fn sym t)]
+    {:op :Mu
+     :sym (or original-name sym)
+     :type ab}))
+
 (def ^:dynamic *tvar* #{})
 
-(defn parse-type-by [t {:keys [Poly* parse-type]}]
+(defn parse-type-by [t {:keys [Poly* Mu* parse-type]}]
   (let [parse-fn-arity (fn [t]
                          {:pre [(vector? t)]}
                          (let [[args [_ ret & more]] (split-with (complement #{:->}) t)]
@@ -280,6 +321,10 @@
                  All (let [[syms t] (rest t)]
                        (binding [*tvar* (into *tvar* syms)]
                          (Poly* syms (parse-type t))))
+                 Rec (let [[syms t] (rest t)]
+                       (assert (= 1 (count syms)))
+                       (binding [*tvar* (into *tvar* syms)]
+                         (Mu* (first syms) (parse-type t))))
                  IFn (let [methods (mapv parse-fn-arity (rest t))]
                        (assert (seq methods))
                        {:op :IFn
@@ -298,6 +343,7 @@
                                  Poly-body
                                  Poly-constraints
                                  Poly-bounds
+                                 Mu-body
                                  unparse-type]}]
   (case (:op t)
     ; TODO move out the constraint/bounds logic
@@ -325,6 +371,9 @@
                         (when (seq constraints)
                           [:constraints (set constraints)]))
                   body))
+    :Mu (let [g (Mu-free t)
+              body (unparse-type (Mu-body g t))]
+          (list 'Rec [(unparse-type g)] body))
     :F (or (when (not *verbose-types*)
              (:original-name t))
            (:name t))

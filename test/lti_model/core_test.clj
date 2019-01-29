@@ -28,6 +28,14 @@
 ; dummy to evaluate code in this ns
 (defmacro ann [e t] e)
 
+(deftest Mu-test
+  (is (= '(Rec [x] x)
+         (unparse-type (parse-type '(Rec [x] x)))))
+  (is (= (parse-type '(Rec [x] x))
+         (unfold (parse-type '(Rec [x] x)))))
+  (is (= (parse-type '[(Rec [x] [x :-> x]) :-> (Rec [x] [x :-> x])])
+         (unfold (parse-type '(Rec [x] [x :-> x]))))))
+
 (deftest check-test
   (is (= 'Int
          (tc Int 1)))
