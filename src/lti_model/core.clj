@@ -184,15 +184,18 @@
 
 (def ^:dynamic *unparse-closure-by-id* nil)
 (def ^:dynamic *unparse-disallow-wildcard* nil)
+(def ^:dynamic *unparse-disallow-closure* nil)
 
 ; T -> Any
 (defn unparse-type [t]
   (case (:op t)
     :Wild (do (assert (not *unparse-disallow-wildcard*))
               '?)
-    :Closure (if *unparse-closure-by-id*
-               (list ::ClosureByID (:id t))
-               (list 'Closure (unparse-env (:env t)) (:expr t)))
+    :Closure (do
+               (assert (not *unparse-disallow-closure*))
+               (if *unparse-closure-by-id*
+                 (list ::ClosureByID (:id t))
+                 (list 'Closure (unparse-env (:env t)) (:expr t))))
     (u/unparse-type-by t 
                        {:Poly-frees Poly-frees
                         :Poly-body Poly-body
@@ -1017,7 +1020,7 @@
 ;                                     :expecteds (Map CExpected Int)}
 ;                         ; if the closure didn't type check, these might not be added
 ;                         :optional  {:forms (Vec Any)
-;                                     :actual-rngs (Map CExpected (Set T))}))
+;                                     :actual-rngs (Map CExpected (Set T))})))
 (def ^:dynamic *closure-cache* nil)
 (def ^:dynamic *reduction-limit* 20)
 (def ^:dynamic *global-reduction-counter* nil)
@@ -1025,7 +1028,7 @@
 
 (declare suggest-annotation)
 
-(def ^:dynamic *currently-suggesting-closures* #{})
+(def ^:dynamic *currently-elaborating-closures* #{})
 
 (declare elaborated-type)
 
@@ -1034,42 +1037,50 @@
   {:pre [(map? closure-cache)
          (symbol? cop)]
    :post [(u/Type? %)]}
-  (let [{:keys [expecteds actual-rngs] :as entry} (get closure-cache cop)
+  (let [{:keys [expecteds actual-rngs original-form] :as entry} (get closure-cache cop)
+        ;_ (prn "elaborated-closure-type" cop (count expecteds) (count actual-rngs))
+        ;_ (binding [*print-length* nil
+        ;            *print-level* nil]
+        ;    (prn original-form))
+
         ; nil `entry` implies `(IFn)` annotation (dead code), because the symbolic closure
         ; was never symbolically invoked
         _ (assert ((some-fn nil? map?) entry))
         fn-type-from-expected (fn [{:keys [args] :as expected}]
                                 (let [actuals (get actual-rngs expected)
-                                      _ (assert (seq actuals))]
-                                  {:op :Fn
-                                   :dom args
-                                   :rng (make-U actuals)}))]
-    {:op :IFn
-     :methods (into []
-                    (comp ; resolve an arity for this symbolic closure
-                          (map (comp fn-type-from-expected key))
-                          ; recursively resolve symbolic closures referenced by this arity
-                          (map #(elaborated-type closure-cache %))
-                          ; now resolve duplicates, crucially after all symbolic closures are resolved.
-                          (distinct))
-                    expecteds)}))
+                                      _ (assert (seq actuals))
+                                      t {:op :Fn
+                                         :dom args
+                                         :rng (make-U actuals)}]
+                                  (when (contains? *currently-elaborating-closures* cop)
+                                    (throw (ex-info (str "Cannot assign recursive type to symbolic closure with id " cop
+                                                         "\n"
+                                                         (binding [*unparse-closure-by-id* true]
+                                                           (unparse-type t)))
+                                                    {type-error-kw true})))
+                                  t))
+        t {:op :IFn
+           :methods (into []
+                          (comp ; resolve an arity for this symbolic closure
+                                (map (comp fn-type-from-expected key))
+                                ; recursively resolve symbolic closures referenced by this arity
+                                (map #(binding [*currently-elaborating-closures* (conj *currently-elaborating-closures* cop)]
+                                        (elaborated-type closure-cache %)))
+                                ; now resolve duplicates, crucially after all symbolic closures are resolved.
+                                (distinct))
+                          expecteds)}]
+    ;(prn "computed" cop)
+    t))
 
-(def ^:dynamic *elaborated-type-depth* 0)
+(def ^:dynamic *currently-suggesting-closures* #{})
 
 (defn elaborated-type [closure-cache t]
   {:pre [(map? closure-cache)]
    :post [(u/Type? %)]}
-  (let [elab (fn [t]
-               (if (= 0 (mod *elaborated-type-depth* 75))
-                 (let [bfn (bound-fn [closure-cache e]
-                             (elaborated-type closure-cache t))]
-                   @(future
-                      (bfn closure-cache t)))
-                 (elaborated-type closure-cache t)))]
-    (binding [*elaborated-type-depth* (inc *elaborated-type-depth*)]
-      (case (:op t)
-        :Closure (elaborated-closure-type closure-cache (:id t))
-        (walk-type elab t)))))
+  (let [elab #(elaborated-type closure-cache %)]
+    (case (:op t)
+      :Closure (elaborated-closure-type closure-cache (:id t))
+      (walk-type elab t))))
 
 ; The :Closure case in `subtype?` might cause irrelevant side effects
 ; to the closure-cache, so it might cause us to give bad suggestions sometimes.
@@ -1224,6 +1235,8 @@
                    actual-rng (:rng m)
                    _ (assert (u/Type? actual-rng))
                    _ (some-> *closure-cache*
+                       (swap! assoc-in [id :original-form] (:expr cop)))
+                   _ (some-> *closure-cache*
                        (swap! update-in [id :forms] (fnil conj []) eifn))
                    _ (some-> *closure-cache*
                        (swap! update-in [id :actual-rngs {:args cargs :ret P}]
@@ -1282,6 +1295,7 @@
 (declare check resolve-symbolic-closures)
 
 (def ^:dynamic *simplify-EnclosingFnCase* nil)
+(def ^:dynamic *disable-elaboration* nil)
 
 (defn check-form [P env e]
   (assert (not *closure-cache*) "Recursive check-form not allowed")
@@ -1289,12 +1303,14 @@
                                   :validator #(and (map? %)
                                                    (every? symbol? (keys %))))
             *global-reduction-counter* (atom 0 :validator int?)]
-    (let [e (check P env e)
-          r (resolve-symbolic-closures @*closure-cache* e)
-          ; prematurely simplifies EnclosingFnCase if enabled above
-          r (binding [*simplify-EnclosingFnCase* true]
-              (resolve-symbolic-closures @*closure-cache* r))]
-      r)))
+    (let [e (check P env e)]
+      (if *disable-elaboration*
+        e
+        (let [r (resolve-symbolic-closures @*closure-cache* e)
+              ; prematurely simplifies EnclosingFnCase if enabled above
+              r (binding [*simplify-EnclosingFnCase* true]
+                  (resolve-symbolic-closures @*closure-cache* r))]
+          r)))))
 
 ; T Env E -> (U nil Result)
 (defn check-or-nil [P env e]
@@ -1304,70 +1320,60 @@
 
 (declare merge-enclosing-fn-cases)
 
-(def ^:dynamic *resolve-symbolic-closures-depth* 0)
-
 ; dirty-tree-walk expression e and resolve symbolic closures
 (defn resolve-symbolic-closures [closure-cache e]
   {:pre [(map? closure-cache)]}
-  (let [resolve-symbolic-closures 
-        (fn [closure-cache e]
-          (if (= 0 (mod *resolve-symbolic-closures-depth* 100))
-            (let [bfn (bound-fn [closure-cache e]
-                        (resolve-symbolic-closures closure-cache e))]
-              @(future
-                 (bfn closure-cache e)))
-            (resolve-symbolic-closures closure-cache e)))]
-    (binding [*resolve-symbolic-closures-depth* (inc *resolve-symbolic-closures-depth*)]
-      ;postwalk because suggested-annotation-for-closure already traverses its result
-      ; to resolve closures, and so we can also simplify EnclosingFnCase types
-      (walk/postwalk (fn [e]
-                       (cond
-                         ;expand symbolic closure bodies
-                         (and (seq? e)
-                              (= ::ClosureFormsByID (first e))
-                              (= 2 (count e)))
-                         (let [{:keys [ids original-form] :as opt} (second e)
-                               _ (assert (map? opt))
-                               ffrms (map #(get-in closure-cache [% :forms]) ids)]
-                           (if (every? nil? ffrms)
-                             ;dead code, equivalent to checking the function as Any (or maybe `(IFn)`?)
-                             original-form
-                             (let [_ (assert (every? (every-pred vector? seq) ffrms)
-                                             (vec ffrms))
-                                   frms (mapv #(resolve-symbolic-closures closure-cache %)
-                                              (apply concat ffrms))]
-                               (merge-enclosing-fn-cases frms))))
+  ;postwalk because suggested-annotation-for-closure already traverses its result
+  ; to resolve closures, and so we can also simplify EnclosingFnCase types
+  (walk/postwalk (fn [e]
+                   (cond
+                     ;expand symbolic closure bodies
+                     (and (seq? e)
+                          (= ::ClosureFormsByID (first e))
+                          (= 2 (count e)))
+                     (let [{:keys [ids original-form] :as opt} (second e)
+                           _ (assert (map? opt))
+                           ffrms (map #(get-in closure-cache [% :forms]) ids)]
+                       (if (every? nil? ffrms)
+                         ;dead code, equivalent to checking the function as Any (or maybe `(IFn)`?)
+                         original-form
+                         (let [_ (assert (every? (every-pred vector? seq) ffrms)
+                                         (vec ffrms))
+                               frms (mapv #(resolve-symbolic-closures closure-cache %)
+                                          (apply concat ffrms))]
+                           (merge-enclosing-fn-cases frms))))
 
-                         ;expand symbolic closure types
-                         (and (seq? e)
-                              (= ::ClosureByID (first e))
-                              (symbol? (second e)))
-                         (let [[_ id] e
-                               _ (assert (symbol? id))
-                               ; resolve this closure type
-                               t (elaborated-closure-type closure-cache id)
-                               ; convert back to syntax
-                               e (binding [*unparse-closure-by-id* true]
-                                   (unparse-type t))]
-                           ; recur
-                           (resolve-symbolic-closures closure-cache e))
+                     ;expand symbolic closure types
+                     (and (seq? e)
+                          (= ::ClosureByID (first e))
+                          (symbol? (second e)))
+                     (let [[_ id] e
+                           _ (assert (symbol? id))
+                           ; resolve this closure type
+                           t (elaborated-closure-type closure-cache id)
+                           ; convert back to syntax
+                           e (binding [*unparse-disallow-closure* true]
+                               (unparse-type t))]
+                       ; recur
+                       #_(resolve-symbolic-closures closure-cache e)
+                       e)
 
-                         ;simplify EnclosingFnCase types
-                         (and *simplify-EnclosingFnCase*
-                              (seq? e)
-                              (= 'EnclosingFnCase (first e))
-                              (integer? (second e)))
-                         (let [[_ _ & fn-cases] e
-                               _ (assert (even? (count fn-cases)))
-                               cases-paired (partition 2 fn-cases)]
-                           ; rhs never changes
-                           (if (apply = (map second cases-paired))
-                             (second fn-cases)
-                             ;TODO group cases keyed via unions
-                             e))
+                     ;simplify EnclosingFnCase types
+                     (and *simplify-EnclosingFnCase*
+                          (seq? e)
+                          (= 'EnclosingFnCase (first e))
+                          (integer? (second e)))
+                     (let [[_ _ & fn-cases] e
+                           _ (assert (even? (count fn-cases)))
+                           cases-paired (partition 2 fn-cases)]
+                       ; rhs never changes
+                       (if (apply = (map second cases-paired))
+                         (second fn-cases)
+                         ;TODO group cases keyed via unions
+                         e))
 
-                         :else e))
-                     e))))
+                     :else e))
+                 e))
 
 (defn count-papps [t]
   {:pre [(u/Type? t)]

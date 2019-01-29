@@ -221,10 +221,15 @@
          (tc ?
              (let [f (fn [x] x)]
                (f 1)))))
+  ;recursive function type
   (is (= 'Int
-         (tc ?
-             (let [f (fn [x] x)]
-               ((f f) 1)))))
+         (binding [*disable-elaboration* true]
+           (tc ?
+               (let [f (fn [x] x)]
+                 ((f f) 1))))))
+  (is (tc-err ?
+              (let [f (fn [x] x)]
+                ((f f) 1))))
   ; not exponential like let-polymorphism: https://cs.stackexchange.com/questions/6617/concise-example-of-exponential-cost-of-ml-type-inference
 ; # let pair x f = f x x;;
 ; # let f1 x = pair x in
@@ -233,25 +238,57 @@
 ;   fun z -> f3 (fun x -> x) z;;
   (is
     (= 'Int
-       (tc ?
-           ((let [pair (fn [f] ; flipped f and x
-                         (fn [x]
-                           ((f x) x)))]
-              (let [f1 (fn [x] (pair x))]
-                (let [f2 (fn [x] (f1 (f1 x)))]
-                  (let [f3 (fn [x] (f2 (f2 x)))]
-                    (let [f4 (fn [x] (f3 (f3 x)))]
-                      (fn [z] ((f4 (fn [x] x)) z)))))))
-            (fn [x]
-              (fn [y]
-                (fn [x']
-                  (fn [y']
-                    (fn [x]
-                      (fn [y]
-                        (fn [x']
-                          (fn [y']
-                            ;return 1
-                            1))))))))))))
+       (binding [*disable-elaboration* true]
+         (tc ?
+             ((let [pair (fn [f] ; flipped f and x
+                           (fn [x]
+                             ((f x) x)))]
+                (let [f1 (fn [x] (pair x))]
+                  (let [f2 (fn [x] (f1 (f1 x)))]
+                    (let [f3 (fn [x] (f2 (f2 x)))]
+                      (let [f4 (fn [x] (f3 (f3 x)))]
+                        (fn [z] ((f4 (fn [x] x)) z)))))))
+              ;this is apparently given a recursive type, (Rec [a] [a -> ?]).
+              (fn [x]
+                (fn [y]
+                  (fn [x']
+                    (fn [y']
+                      (fn [x]
+                        (fn [y]
+                          (fn [x']
+                            (fn [y']
+                              ;return 1
+                              1)))))))))))))
+  ; smallest case of recursive function type, without elaborating
+  (is (= '(Closure {} (fn [f] f))
+         (binding [*disable-elaboration* true]
+           (tc ? (let [f (fn [f] f)]
+                   (f f))))))
+  ; smallest case of recursive function type, with elaboration (fails)
+  (is (tc-err ? (let [f (fn [f] f)]
+                  (f f))))
+  ; fails because of the recursive function type
+  (is
+    (tc-err ?
+            ((let [pair (fn [f] ; flipped f and x
+                          (fn [x]
+                            ((f x) x)))]
+               (let [f1 (fn [x] (pair x))]
+                 (let [f2 (fn [x] (f1 (f1 x)))]
+                   (let [f3 (fn [x] (f2 (f2 x)))]
+                     (let [f4 (fn [x] (f3 (f3 x)))]
+                       (fn [z] ((f4 (fn [x] x)) z)))))))
+             ;this is apparently given a recursive type, (Rec [a] [a -> ?]).
+             (fn [x]
+               (fn [y]
+                 (fn [x']
+                   (fn [y']
+                     (fn [x]
+                       (fn [y]
+                         (fn [x']
+                           (fn [y']
+                             ;return 1
+                             1)))))))))))
   ; exponential growth in size of printed type
   (is
     (= (read-string (slurp "huge_type.edn"))
@@ -436,6 +473,8 @@
                  (x2 1)))))))
   ;checks (x4)
   (is
+    ;slow
+    (binding [*disable-elaboration* true]
      (tc Any
          (let [pair (fn [x y]
                       (fn [z]
@@ -444,25 +483,26 @@
            (let [x2 #(x1 (x1 %))]
            (let [x3 #(x2 (x2 %))]
            (let [x4 #(x3 (x3 %))]
-             (x4 1))))))))
+             (x4 1)))))))))
   ;checks (x4 with 9 fst's)
   (is
-    (= 'Int
-       (tc ?
-           (let [pair (fn [x y]
-                        (fn [z]
-                          (z x y)))
-                 fst (fn [p]
-                       (p (fn [x y]
-                            x)))
-                 snd (fn [p]
-                       (p (fn [x y]
-                            y)))]
-             (let [x1 #(pair % %)]
-             (let [x2 #(x1 (x1 %))]
-             (let [x3 #(x2 (x2 %))]
-             (let [x4 #(x3 (x3 %))]
-               (fst
+    ;FIXME slow but unsure if it will ever return!
+    (binding [*disable-elaboration* true]
+      (= 'Int
+         (tc ?
+             (let [pair (fn [x y]
+                          (fn [z]
+                            (z x y)))
+                   fst (fn [p]
+                         (p (fn [x y]
+                              x)))
+                   snd (fn [p]
+                         (p (fn [x y]
+                              y)))]
+               (let [x1 #(pair % %)]
+               (let [x2 #(x1 (x1 %))]
+               (let [x3 #(x2 (x2 %))]
+               (let [x4 #(x3 (x3 %))]
                  (fst
                    (fst
                      (fst
@@ -470,10 +510,13 @@
                          (fst
                            (fst
                              (fst
-                               (x4 1)))))))))))))))))
+                               (fst
+                                 (x4 1))))))))))))))))))
   ;checks (x4 with 8 fst's)
   (is
     (=    '[[Int Int :-> Int] :-> Int]
+      ;FIXME slow but unsure if it will ever return!
+      (binding [*disable-elaboration* true]
        (tc [[Int Int :-> Int] :-> Int]
            (let [pair (fn [x y]
                         (fn [z]
@@ -495,7 +538,7 @@
                        (fst
                          (fst
                            (fst
-                             (x4 1))))))))))))))))
+                             (x4 1)))))))))))))))))
   ; FIXME BUG! returns Nothing
 ; x4 with 9 fst's, but with polymorphic annotation on 'pair'
 #_
@@ -1182,6 +1225,7 @@
                   (let [x3 (fn [y] (x2 (x2 y)))]
                     (x3 (fn [x] x)))))))))
   (is ((juxt last symbol-count)
+       (binding [*disable-elaboration* true] ;FIXME slow! unsure if elaborates
         (tc ?
             (let [P (fn [x]
                       (fn [z]
@@ -1190,8 +1234,9 @@
                 (let [x2 (fn [y] (x1 (x1 y)))]
                   (let [x3 (fn [y] (x2 (x2 y)))]
                     (let [x4 (fn [y] (x3 (x3 y)))]
-                      (x4 (fn [x] x))))))))))
+                      (x4 (fn [x] x)))))))))))
   (is ((juxt last symbol-count)
+       (binding [*disable-elaboration* true] ;FIXME slow! unsure if elaborates
         (tc ?
             (let [P (fn [x]
                       (fn [z]
@@ -1201,7 +1246,7 @@
                   (let [x3 (fn [y] (x2 (x2 y)))]
                     (let [x4 (fn [y] (x3 (x3 y)))]
                       (let [x5 (fn [y] (x4 (x4 y)))]
-                        (x5 (fn [x] x))))))))))))
+                        (x5 (fn [x] x)))))))))))))
 
 (deftest polymorphic-upcast
   (is (= '(All [b a] [[a :-> b] a :-> b])
