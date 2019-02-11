@@ -30,4 +30,8 @@
   ;app
   (is (= 'Int (tc (inc 1))))
   (is (tc-err (inc "a")))
+  ;fn
+  (is (tc (ann (fn [] "a") [:-> Str])))
+  (is (tc-err (ann (fn [] "a") [:-> Int])))
+  (is (tc-err (ann (fn [] ["a" 1]) [:-> Int])))
   )
