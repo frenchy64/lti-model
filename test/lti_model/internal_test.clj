@@ -27,4 +27,7 @@
   (is (tc-err (ann 1 Str)))
   (is (tc-err (ann "a" Int)))
   (is (tc-err (ann ["a" 1] Str)))
+  ;app
+  (is (= 'Int (tc (inc 1))))
+  (is (tc-err (inc "a")))
   )

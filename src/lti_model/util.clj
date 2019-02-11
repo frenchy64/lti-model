@@ -1,5 +1,5 @@
 (ns lti-model.util
-  )
+  (:require [clojure.string :as str]))
 
 (def type-error-kw ::type-error)
 
@@ -502,3 +502,8 @@
            (str msg "\nActual:\n\t" (print-str (unparse-type t)) "\nExpected:\n\t" (print-str (unparse-type P))
                 "\nin:\n\t" e)
            {type-error-kw true})))
+
+(defn indent-str-by [ind s]
+  (apply str
+         (interpose (str "\n" ind)
+                    (str/split-lines s))))

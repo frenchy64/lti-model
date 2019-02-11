@@ -1,5 +1,6 @@
 (ns lti-model.internal
-  (:require [lti-model.util :as u]))
+  (:require [lti-model.util :as u]
+            [clojure.pprint :as pp]))
 
 ; e ::=                    ; Expressions
 ;       c                  ; constant functions
@@ -149,6 +150,20 @@
 (defn expected-error [msg actual expected  e]
   (u/expected-error-with msg actual expected e unparse-type))
 
+(defn check-app [cop cargs]
+  {:pre [(u/Type? cop)
+         (every? u/Type? cargs)]
+   :post [((some-fn nil? u/Type?) %)]}
+  (case (:op cop)
+    :IFn (some (fn [m]
+                 {:pre [(u/Fn? m)]}
+                 (when (= (count cargs)
+                          (count (:dom m)))
+                   (when (every? identity (map subtype? cargs (:dom m)))
+                     (:rng m))))
+               (:methods cop))
+    ))
+
 (defn check [env e]
   {:pre [(map? env)]
    :post [(u/Result? %)]}
@@ -177,7 +192,19 @@
                                                e))]
                        ;(prn "ann")
                        (u/->Result (list 'ann (u/ret-e r) (unparse-type exp))
-                                   exp))))
+                                   exp))
+                 (let [rcop (check env op)
+                       cop (u/ret-t rcop)
+                       rcargs (mapv #(check env %) args)
+                       cargs (mapv u/ret-t rcargs)]
+                   (if-let [t (check-app cop cargs)]
+                     (u/->Result e t)
+                     (throw (ex-info (str "Could not apply function: "
+                                          "\nFunction:\n\t"
+                                          (u/indent-str-by "\t" (with-out-str (pp/pprint (unparse-type cop))))
+                                          "\nArguments:\n" (apply str (map #(println-str (str "\t" %)) (map unparse-type cargs)))
+                                          "\n\nin:\n\t" e)
+                                     {u/type-error-kw true}))))))
     :else (assert nil (str "Bad expression in check: " (pr-str e)))))
 
 (defn check-form [env e]

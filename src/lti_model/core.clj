@@ -788,11 +788,6 @@
                         order)]
       (into [] (distinct) (apply concat delay-order)))))
 
-(defn indent-str-by [ind s]
-  (apply str
-         (interpose (str "\n" ind)
-                    (str/split-lines s))))
-
 (defn scoped-pred [pred t]
   {:pre [(:op t)]}
   (if (= :Scope (:op t))
@@ -1614,7 +1609,7 @@
                                    (:rng-t sol)))
                      (throw (ex-info (str "Could not apply function: "
                                           "\nFunction:\n\t"
-                                          (indent-str-by "\t" (with-out-str (pprint (unparse-type cop))))
+                                          (u/indent-str-by "\t" (with-out-str (pprint (unparse-type cop))))
                                           "\nArguments:\n" (apply str (map #(println-str (str "\t" %)) (map unparse-type cargs)))
                                           "Expected:\n\t" (unparse-type P)
                                           "\n\nin:\n\t" e)
