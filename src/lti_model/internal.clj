@@ -5,9 +5,8 @@
 ; e ::=                    ; Expressions
 ;       c                  ; constant functions
 ;     | n                  ; integers
-;     | (fn {:interface t} ; functions
-;         [x *]
-;         e)
+;     | (ann (fn [x *] e) t) ; functions
+;     | (ann e t)          ; type ascription
 ;     | [e *]              ; sequences
 ;     | (inst-case e (case (enclosing-fn-arity n) t [t *] *))       ; polymorphic type instantiation
 
@@ -145,7 +144,13 @@
   {:pre [(u/Type? s)
          (u/Type? t)]
    :post [(boolean? %)]}
-  (= s t))
+  (cond
+    (or (= s t)
+        (= u/-any t)
+        (= u/-nothing s))
+    true
+
+    :else false))
 
 (defn expected-error [msg actual expected  e]
   (u/expected-error-with msg actual expected e unparse-type))
@@ -155,14 +160,17 @@
          (every? u/Type? cargs)]
    :post [((some-fn nil? u/Type?) %)]}
   (case (:op cop)
-    ; ordered intersections
-    :IFn (some (fn [m]
-                 {:pre [(u/Fn? m)]}
-                 (when (= (count cargs)
-                          (count (:dom m)))
-                   (when (every? identity (map subtype? cargs (:dom m)))
-                     (:rng m))))
-               (:methods cop))
+    ; unordered intersections
+    :IFn (let [as (keep (fn [m]
+                          {:pre [(u/Fn? m)]
+                           :post [((some-fn nil? u/Type?) %)]}
+                          (when (= (count cargs)
+                                   (count (:dom m)))
+                            (when (every? identity (map subtype? cargs (:dom m)))
+                              (:rng m))))
+                        (:methods cop))]
+           (when (seq as)
+             (u/make-I as)))
     ))
 
 (defn check [env e]
@@ -195,6 +203,8 @@
                                                    {u/type-error-kw true})))
                                _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
                                _ (assert (vector? plist) (str "'fn' takes a vector of arguments, found " plist))
+                               ; check body. no use for return type because entire interface is provided
+                               ; for each function, so it's thrown away.
                                _ (case (:op exp)
                                    :IFn (let [_ (mapv (fn [m]
                                                         {:pre [(u/Fn? m)]}

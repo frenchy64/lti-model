@@ -276,6 +276,12 @@
   ({'Int #{-Num}}
    (:name t)))
 
+(defn subtype-Seq? [s t]
+  {:pre [(u/Seq? s)
+         (u/Seq? t)]
+   :post [(boolean? %)]}
+  (subtype? (:type s) (:type t)))
+
 (defn subtype? [s t]
   {:pre [(:op s)
          (:op t)
@@ -291,10 +297,10 @@
         (= -nothing s))
     true
 
-    (= :Intersection (:op t)) (every? #(subtype? s %) (:types t))
-    (= :Union (:op s))        (every? #(subtype? % t) (:types s))
-    (= :Intersection (:op s)) (boolean (some #(subtype? % t) (:types s)))
-    (= :Union (:op t))        (boolean (some #(subtype? s %) (:types t)))
+    (u/Intersection? t) (every? #(subtype? s %) (:types t))
+    (u/Union? s)        (every? #(subtype? % t) (:types s))
+    (u/Intersection? s) (boolean (some #(subtype? % t) (:types s)))
+    (u/Union? t)        (boolean (some #(subtype? s %) (:types t)))
 
     (and (IFn? s)
          (IFn? t))
@@ -303,11 +309,10 @@
                      (:types s)))
             (:types t))
 
-    (and (= :Seq (:op s))
-         (= :Seq (:op t)))
-    (subtype? (:type s) (:type t))
+    ((every-pred u/Seq?) s t)
+    (subtype-Seq? s t)
 
-    (= :Base (:op s))
+    (u/Base? s)
     (boolean
       (when-let [s (base-supers s)]
         (subtype? (make-U s) t)))

@@ -63,6 +63,9 @@
 (defn Base? [t] (= :Base (:op t)))
 (defn Poly? [t] (= :Poly (:op t)))
 (defn Fn? [t] (= :Fn (:op t)))
+(defn Seq? [t] (= :Seq (:op t)))
+(defn Intersection? [t] (= :Intersection (:op t)))
+(defn Union? [t] (= :Union (:op t)))
 
 ; (Seqable T) -> T
 (defn make-U [ts]

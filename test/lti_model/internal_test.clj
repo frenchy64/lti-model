@@ -27,11 +27,21 @@
   (is (tc-err (ann 1 Str)))
   (is (tc-err (ann "a" Int)))
   (is (tc-err (ann ["a" 1] Str)))
+  ;ann
+  (is (= 'Int (tc (ann 1 Int))))
+  ;TODO (is (= 'Num (tc (ann 1 Num))))
   ;app
   (is (= 'Int (tc (inc 1))))
+  (is (= 'Int (tc (+ 1 1))))
+  ;TODO
+  ;(is (= 'Int (tc (+' (ann 1 Num) 1))))
   (is (tc-err (inc "a")))
   ;fn
   (is (tc (ann (fn [] "a") [:-> Str])))
   (is (tc-err (ann (fn [] "a") [:-> Int])))
   (is (tc-err (ann (fn [] ["a" 1]) [:-> Int])))
+  ; poly app
+  #_;TODO
+  (is (tc-err (map (ann (fn [e] e) [Int :-> Int])
+                   [1 2])))
   )
