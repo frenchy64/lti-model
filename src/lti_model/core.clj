@@ -146,22 +146,14 @@
   (u/Mu-body-by sym p instantiate))
 
 (defn Poly-constraints [p images]
-  {:pre [(= :Poly (:op p))
+  {:pre [(u/Poly? p)
          (= (count images) (count (:syms p)))]}
-  (mapv (fn [c]
-          (-> c
-              (update :lower #(instantiate-all images %))
-              (update :upper #(instantiate-all images %))))
-        (:constraints p)))
+  (u/Poly-constraints-by p images instantiate-all))
 
 (defn Poly-bounds [p images]
-  {:pre [(= :Poly (:op p))
+  {:pre [(u/Poly? p)
          (= (count images) (count (:bounds p)))]}
-  (mapv (fn [b]
-          (-> b
-              (update :lower #(instantiate-all images %))
-              (update :upper #(instantiate-all images %))))
-        (:bounds p)))
+  (u/Poly-bounds-by p images instantiate-all))
 
 (defn Poly* [syms t & args]
   (apply u/Poly*-by syms t abstract-all args))
@@ -243,27 +235,6 @@
 
 (defn fv [t]
   (u/fv-by t {:fv-variances fv-variances}))
-
-(def constant-type
-  {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))
-   'appid (parse-type '(All [a] [[a :-> a] a :-> a]))
-   'map (parse-type '(All [a b] [[a :-> b] (Seq a) :-> (Seq b)]))
-   'app0 (parse-type '(All [a b] [[a :-> b] :-> [a :-> b]]))
-   'app2 (parse-type '(All [a b c] [[a b :-> c] a b :-> c]))
-   'id (parse-type '(All [a] [a :-> a]))
-   '+ (parse-type '[Int Int :-> Int])
-   '+' (parse-type '(IFn [Int Int :-> Int]
-                         [Num Num :-> Num]))
-   'inc (parse-type '[Int :-> Int])
-   'inc' (parse-type '(IFn [Int :-> Int]
-                           [Num :-> Num]))
-   'comp (parse-type '(All [a b c] [[b :-> c] [a :-> b] :-> [a :-> c]]))
-   'every-pred (parse-type '(All [a] [[a :-> Any] [a :-> Any] :-> [a :-> Any]]))
-   'partial (parse-type '(All [a b c] [[a b :-> c] a :-> [b :-> c]]))
-   'reduce (parse-type '(All [a c] [[a c :-> a] a (Seq c) :-> a]))
-   'mapT (parse-type '(All [a b] [[a :-> b] :-> (All [r] [[r b :-> r] :-> [r a :-> r]])]))
-   'intoT (parse-type '(All [a b] [(Seq b) (All [r] [[r b :-> r] :-> [r a :-> r]]) (Seq a) :-> (Seq b)]))
-   })
 
 (declare subtype? check check-or-nil)
 
@@ -593,9 +564,9 @@
                              (assert (= 1 (count (:methods t))))
                              (first (:methods t)))
             (Poly? t) (let [gs (Poly-frees t)
-                                  body (Poly-body t gs)]
-                              (assert (= 1 (count (:methods body))))
-                              (first (:methods body)))
+                            body (Poly-body t gs)]
+                        (assert (= 1 (count (:methods body))))
+                        (first (:methods body)))
             :else (assert nil (str "What is this" (:op t))))
         _ (assert (Fn? m))
         sfv (set/intersection (fv s) X)
@@ -1495,6 +1466,8 @@
                 :else (throw (Exception. (str "Cannot unify fn cases: " e1 " " e2)))
                 ))
             es)))
+
+(def constant-type (u/constant-type-fn parse-type))
 
 #_
 (t/ann check [P Env E :-> T])

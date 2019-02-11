@@ -237,6 +237,24 @@
    :post [(:op %)]}
   (instantiate-all-fn images (:type p)))
 
+(defn Poly-constraints-by [p images instantiate-all]
+  {:pre [(= :Poly (:op p))
+         (= (count images) (count (:syms p)))]}
+  (mapv (fn [c]
+          (-> c
+              (update :lower #(instantiate-all images %))
+              (update :upper #(instantiate-all images %))))
+        (:constraints p)))
+
+(defn Poly-bounds-by [p images instantiate-all]
+  {:pre [(= :Poly (:op p))
+         (= (count images) (count (:bounds p)))]}
+  (mapv (fn [b]
+          (-> b
+              (update :lower #(instantiate-all images %))
+              (update :upper #(instantiate-all images %))))
+        (:bounds p)))
+
 ; F Mu [T Scope -> T] -> Type
 (defn Mu-body-by [image p instantiate-fn]
   {:pre [(Type? image)
@@ -445,3 +463,23 @@
 (defn fv-by [t {:keys [fv-variances]}]
   (set (keys (fv-variances t))))
 
+(defn constant-type-fn [parse-type]
+  {'app (parse-type '(All [a b] [[a :-> b] a :-> b]))
+   'appid (parse-type '(All [a] [[a :-> a] a :-> a]))
+   'map (parse-type '(All [a b] [[a :-> b] (Seq a) :-> (Seq b)]))
+   'app0 (parse-type '(All [a b] [[a :-> b] :-> [a :-> b]]))
+   'app2 (parse-type '(All [a b c] [[a b :-> c] a b :-> c]))
+   'id (parse-type '(All [a] [a :-> a]))
+   '+ (parse-type '[Int Int :-> Int])
+   '+' (parse-type '(IFn [Int Int :-> Int]
+                         [Num Num :-> Num]))
+   'inc (parse-type '[Int :-> Int])
+   'inc' (parse-type '(IFn [Int :-> Int]
+                           [Num :-> Num]))
+   'comp (parse-type '(All [a b c] [[b :-> c] [a :-> b] :-> [a :-> c]]))
+   'every-pred (parse-type '(All [a] [[a :-> Any] [a :-> Any] :-> [a :-> Any]]))
+   'partial (parse-type '(All [a b c] [[a b :-> c] a :-> [b :-> c]]))
+   'reduce (parse-type '(All [a c] [[a c :-> a] a (Seq c) :-> a]))
+   'mapT (parse-type '(All [a b] [[a :-> b] :-> (All [r] [[r b :-> r] :-> [r a :-> r]])]))
+   'intoT (parse-type '(All [a b] [(Seq b) (All [r] [[r b :-> r] :-> [r a :-> r]]) (Seq a) :-> (Seq b)]))
+   })
