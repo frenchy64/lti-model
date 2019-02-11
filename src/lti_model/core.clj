@@ -467,10 +467,7 @@
 (defn largest-matching-sub [t P] (match-dir :down t P))
 
 (defn expected-error [msg t P e]
-  (throw (ex-info
-           (str msg "\nActual:\n\t" (print-str (unparse-type t)) "\nExpected:\n\t" (print-str (unparse-type P))
-                "\nin:\n\t" e)
-           {type-error-kw true})))
+  (u/expected-error-with msg t P e unparse-type))
 
 (defn check-match [t P m e]
   {:pre [(u/Type? t)
@@ -1469,6 +1466,9 @@
 
 (def constant-type (u/constant-type-fn parse-type))
 
+(defn type-for-symbol [env e]
+  (u/type-for-symbol-with env e constant-type))
+
 #_
 (t/ann check [P Env E :-> T])
 (defn check [P env e]
@@ -1477,9 +1477,7 @@
    :post [(u/Result? %)]}
   (cond
     ; locals shadow globals, except when used as a special form like (ann ...)
-    (symbol? e) (let [t (or (get env e)
-                            (constant-type e)
-                            (assert nil (str "Bad symbol " e)))
+    (symbol? e) (let [t (type-for-symbol env e)
                       m (smallest-matching-super t P)]
                   (u/->Result e (check-match t P m e)))
     (vector? e) (let [rs (mapv #(check -wild env %) e)
@@ -1621,10 +1619,7 @@
                                           "Expected:\n\t" (unparse-type P)
                                           "\n\nin:\n\t" e)
                                      {type-error-kw true}))))))
-    ((some-fn integer? string?) e) (let [t (cond
-                                             (integer? e) -Int
-                                             (string? e) u/-Str)
-                                         _ (assert (u/Type? t))
+    ((some-fn integer? string?) e) (let [t (u/type-for-value e)
                                          m (smallest-matching-super t P)]
                                      (u/->Result e
                                                  (check-match t P m e)))

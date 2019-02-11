@@ -137,13 +137,48 @@
 
 (def constant-type (u/constant-type-fn parse-type))
 
+(defn type-for-symbol [env e]
+  (u/type-for-symbol-with env e constant-type))
+
+(defn subtype? [s t]
+  {:pre [(u/Type? s)
+         (u/Type? t)]
+   :post [(boolean? %)]}
+  (= s t))
+
+(defn expected-error [msg actual expected  e]
+  (u/expected-error-with msg actual expected e unparse-type))
+
 (defn check [env e]
   {:pre [(map? env)]
    :post [(u/Result? %)]}
   (cond
     ; locals shadow globals, except when used as a special form like (ann ...)
-    (symbol? e) (let [t (or (get env e)
-                            (constant-type e)
-                            (assert nil (str "Bad symbol " e)))]
-                  (u/->Result e t))
+    (symbol? e) (u/->Result e (type-for-symbol env e))
+    ((some-fn integer? string?) e) (u/->Result e (u/type-for-value e))
+    (vector? e) (let [rs (mapv #(check env %) e)]
+                  (u/->Result (mapv u/ret-e rs)
+                              {:op :Seq
+                               :type (u/make-U (map u/ret-t rs))}))
+    ((every-pred seq? seq) e)
+             (let [[op & args] e]
+               (case op
+                 ann (let [[e' at & more] args
+                           _ (when more
+                               (throw (ex-info (str "Extra arguments to 'ann': " more)
+                                               {u/type-error-kw true})))
+                           _ (assert (= 2 (count args)) "Not enough arguments to 'ann'")
+                           exp (parse-type at)
+                           r (check env e')
+                           _ (when-not (subtype? (u/ret-t r) exp)
+                               (expected-error "Incorrect annotation for 'ann'"
+                                               (u/ret-t r)
+                                               exp
+                                               e))]
+                       ;(prn "ann")
+                       (u/->Result (list 'ann (u/ret-e r) (unparse-type exp))
+                                   exp))))
     :else (assert nil (str "Bad expression in check: " (pr-str e)))))
+
+(defn check-form [env e]
+  (check env e))

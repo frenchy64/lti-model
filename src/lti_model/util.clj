@@ -483,3 +483,22 @@
    'mapT (parse-type '(All [a b] [[a :-> b] :-> (All [r] [[r b :-> r] :-> [r a :-> r]])]))
    'intoT (parse-type '(All [a b] [(Seq b) (All [r] [[r b :-> r] :-> [r a :-> r]]) (Seq a) :-> (Seq b)]))
    })
+
+(defn type-for-symbol-with [env e constant-type]
+  {:post [(Type? %)]}
+  (or (get env e)
+      (constant-type e)
+      (throw (Exception. (str "Bad symbol: " e)))))
+
+(defn type-for-value [e]
+  {:post [(Type? %)]}
+  (cond
+    (integer? e) -Int
+    (string? e) -Str
+    :else (throw (Exception. (str "Bad value: " e)))))
+
+(defn expected-error-with [msg t P e unparse-type]
+  (throw (ex-info
+           (str msg "\nActual:\n\t" (print-str (unparse-type t)) "\nExpected:\n\t" (print-str (unparse-type P))
+                "\nin:\n\t" e)
+           {type-error-kw true})))
