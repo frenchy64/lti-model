@@ -8,12 +8,15 @@
 (defmacro tc [e]
   `(unparse-type (u/ret-t (check-form {} '~e))))
 
-(defmacro tc-err [e]
+(defmacro throws-type-error? [e]
   `(u/handle-type-error (fn [^Exception e#]
                           (println (.getMessage e#))
                           true)
-     (do (tc ~e)
+     (do ~e
          false)))
+
+(defmacro tc-err [e]
+  `(throws-type-error? (tc ~e)))
 
 (defmacro sub? [s t]
   `(subtype? (parse-type '~s)
@@ -38,21 +41,46 @@
   (is (tc-err (ann (ann (fn [] "a")
                         [:-> Str])
                    [:-> Nothing])))
-  ;TODO (is (= 'Num (tc (ann 1 Num))))
+  (is (tc (ann (fn [f] (f f))
+               (Rec [r] [r :-> r]))))
+  (is (= '[Nothing :-> Any]
+         (tc (ann (ann (fn [f] (f f))
+                       (Rec [r] [r :-> r]))
+                  [Nothing :-> Any]))))
+  (is (= 'Num (tc (ann 1 Num))))
+  ; infinite Rec type
+  (is (tc-err (ann 1 (Rec [r] r))))
   ;app
   (is (= 'Int (tc (inc 1))))
   (is (= 'Int (tc (+ 1 1))))
-  ;TODO
-  ;(is (= 'Int (tc (+' (ann 1 Num) 1))))
+  (is (= 'Num (tc (+' (ann 1 Num) 1))))
   (is (tc-err (inc "a")))
   ;fn
   (is (tc (ann (fn [] "a") [:-> Str])))
   (is (tc-err (ann (fn [] "a") [:-> Int])))
   (is (tc-err (ann (fn [] ["a" 1]) [:-> Int])))
+  (is (tc (ann (fn [x] x)
+               (IFn [Int :-> Int]
+                    [Str :-> Str]))))
+  (is (tc-err (ann (fn [x] x)
+                   (IFn [Int :-> Int]
+                        [Str :-> Int]))))
   ; poly app
-  #_;TODO
   (is (tc-err (map (ann (fn [e] e) [Int :-> Int])
                    [1 2])))
+  (is (tc ((ann map
+                (PApp (All [a b] [[a :-> b] (Seq a) :-> (Seq b)])
+                      Int
+                      Int))
+           (ann (fn [e] e) [Int :-> Int])
+           [1 2])))
+  ; switched 'All' arguments
+  (is (tc-err ((ann map
+                    (PApp (All [b a] [[a :-> b] (Seq a) :-> (Seq b)])
+                          Int
+                          Int))
+               (ann (fn [e] e) [Int :-> Int])
+               [1 2])))
   )
 
 (deftest subtype-test
@@ -60,4 +88,11 @@
   (is (sub? Nothing Any))
   (is (sub? [:-> Nothing] [:-> Any]))
   (is (not (sub? [:-> Any] [:-> Nothing])))
+  (is (sub? (Rec [a] [a :-> a])
+            [(Rec [b] [b :-> b]) :-> (Rec [c] [c :-> c])]))
+  (is (not (sub? (Rec [a] [a :-> a])
+                 [Int :-> Int])))
+  (is (throws-type-error? (sub? (Rec [a] a) (Rec [b] b))))
+  (is (throws-type-error? (sub? Int (Rec [b] b))))
+  (is (throws-type-error? (sub? (Rec [b] b) Int)))
   )

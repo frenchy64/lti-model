@@ -36,36 +36,47 @@
   {:pre [(Result? r)]}
   (:e r))
 
+(def -Int {:op :Base :name 'Int})
+(def -Str {:op :Base :name 'Str})
+(def -Num {:op :Base :name 'Num})
+(def -any {:op :Intersection :types #{}})
+(def -nothing {:op :Union :types #{}})
 
-; Poly -> (Vec '{:op ':F})
+(defmacro ^:private make-op-predicate [nme]
+  `(defn ~(symbol (str nme "?")) [t#]
+     (= ~(keyword nme)
+        (:op t#))))
+(make-op-predicate IFn)
+(make-op-predicate Base)
+(make-op-predicate Poly)
+(make-op-predicate Fn)
+(make-op-predicate Seq)
+(make-op-predicate Intersection)
+(make-op-predicate Union)
+(make-op-predicate Mu)
+(make-op-predicate F)
+(make-op-predicate PApp)
+
+; Poly -> (Vec F)
 (defn Poly-frees [p]
-  {:pre [(= :Poly (:op p))]}
+  {:pre [(Poly? p)]
+   :post [(vector? %)
+          (< 0 (count %))
+          (every? F? %)]}
   (mapv (fn [s]
           {:pre [(symbol? s)]}
           {:op :F :name (with-meta (gensym s) {:original-name s})
            :original-name s})
         (:syms p)))
 
-; Mu -> '{:op ':F}
+; Mu -> F
 (defn Mu-free [p]
-  {:pre [(= :Mu (:op p))]}
+  {:pre [(Mu? p)]
+   :post [(F? %)]}
   (let [s (:sym p)]
     (assert (symbol? s))
     {:op :F :name (with-meta (gensym s) {:original-name s})
      :original-name s}))
-
-(def -Int {:op :Base :name 'Int})
-(def -Str {:op :Base :name 'Str})
-(def -Num {:op :Base :name 'Num})
-(def -any {:op :Intersection :types #{}})
-(def -nothing {:op :Union :types #{}})
-(defn IFn? [t] (= :IFn (:op t)))
-(defn Base? [t] (= :Base (:op t)))
-(defn Poly? [t] (= :Poly (:op t)))
-(defn Fn? [t] (= :Fn (:op t)))
-(defn Seq? [t] (= :Seq (:op t)))
-(defn Intersection? [t] (= :Intersection (:op t)))
-(defn Union? [t] (= :Union (:op t)))
 
 ; (Seqable T) -> T
 (defn make-U [ts]
@@ -261,7 +272,7 @@
 ; F Mu [T Scope -> T] -> Type
 (defn Mu-body-by [image p instantiate-fn]
   {:pre [(Type? image)
-         (= :Mu (:op p))]
+         (Mu? p)]
    :post [(Type? %)]}
   (instantiate-fn image (:type p)))
 
@@ -275,7 +286,7 @@
 
 ; Mu -> Type
 (defn unfold-by [m {:keys [Mu-body subst]}]
-  {:pre [(= :Mu (:op m))]
+  {:pre [(Mu? m)]
    :post [(Type? %)]}
   (let [sym (Mu-free m)
         body (Mu-body sym m)]
@@ -313,12 +324,19 @@
      :constraints constraints
      :type ab}))
 
+(defn validate-Mu-body [m]
+  (case (:op m)
+    :IFn nil
+    (throw (ex-info (str "Not allowed in Rec body: " (:op m))
+                    {type-error-kw true}))))
+
 ; Sym Type [Sym Scope -> Type] -> Type
 (defn Mu*-by [sym t abstract-fn & {:keys [original-name]}]
   {:pre [(symbol? sym)
          (Type? t)
          ((some-fn nil? symbol?) original-name)]}
-  (let [ab (abstract-fn sym t)]
+  (let [_ (validate-Mu-body t)
+        ab (abstract-fn sym t)]
     {:op :Mu
      :sym (or original-name sym)
      :type ab}))

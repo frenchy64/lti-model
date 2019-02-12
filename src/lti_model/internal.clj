@@ -77,6 +77,16 @@
 ; Any -> T
 (defn parse-type [t]
   (cond
+    (and (seq? t)
+         ('#{PApp} (first t))
+         (next t))
+    (let [[_ psyn & targssyn] t
+          p (parse-type psyn)
+          _ (assert (u/Poly? p) (unparse-type p))
+          targs (mapv parse-type targssyn)]
+      {:op :PApp
+       :poly p
+       :args targs})
     :else (u/parse-type-by t {:Poly* Poly*
                               :Mu* Mu*
                               :parse-type parse-type})))
@@ -169,22 +179,72 @@
    :post [(boolean? %)]}
   (u/subtype-IFn?-with s t subtype-Fn?))
 
+(defn subst [sb t]
+  {:pre [(map? sb)
+         (u/Type? t)]
+   :post [(u/Type? %)]}
+  (u/subst-by sb t {:abstract-all abstract-all
+                    :instantiate-all instantiate-all}))
+
+(defn unfold [m]
+  (u/unfold-by m {:Mu-body Mu-body
+                  :subst subst}))
+
+(def resolvable? (some-fn u/Mu? u/PApp?))
+
+(defn apply-PApp [p]
+  {:pre [(u/PApp? p)]
+   :post [(u/Type? %)]}
+  (let [poly (:poly p)
+        args (:args p)
+        _ (assert (u/Poly? poly))
+        _ (assert (vector args))]
+    (Poly-body poly args)))
+
+(defn resolve-type [t]
+  {:pre [(u/Type? t)]
+   :post [(u/Type? %)]}
+  (case (:op t)
+    :Mu (unfold t)
+    :PApp (apply-PApp t)))
+
+(defn fully-resolve-type
+  ([t] (fully-resolve-type t #{}))
+  ([t seen]
+   (let [_ (when (seen t)
+             (throw (Exception. (str "Infinite type detected: "
+                                     (unparse-type t)))))]
+     (if (resolvable? t)
+       (recur (resolve-type t) (conj seen t))
+       t))))
+
+(def ^:dynamic *subtype-seen* #{})
+
 (defn subtype? [s t]
   {:pre [(u/Type? s)
          (u/Type? t)]
    :post [(boolean? %)]}
-  (cond
-    (= s t) true
+  (if (or (*subtype-seen* [s t])
+          (= s t))
+    true
+    (binding [*subtype-seen* (conj *subtype-seen* [s t])]
+      (cond
+        ((some-fn u/Intersection? u/Union?) s t) (subtype-Union-Intersection? s t)
 
-    ((some-fn u/Intersection? u/Union?) s t) (subtype-Union-Intersection? s t)
+        (u/Mu? s) (subtype? (unfold s) t)
+        (u/Mu? t) (subtype? s (unfold t))
 
-    ((every-pred u/IFn?) s t) (subtype-IFn? s t)
+        (and (u/Poly? s)
+             (u/PApp? t))
+        (subtype? s (:poly t))
 
-    ((every-pred u/Seq?) s t) (subtype-Seq? s t)
+        ((every-pred u/IFn?) s t) (subtype-IFn? s t)
 
-    (u/Base? s) (subtype-Base-left? s t)
+        ((every-pred u/Seq?) s t) (subtype-Seq? s t)
 
-    :else false))
+        (u/Base? s) (subtype-Base-left? s t)
+
+        :else false))))
 
 (defn expected-error [msg actual expected  e]
   (u/expected-error-with msg actual expected e unparse-type))
@@ -193,19 +253,65 @@
   {:pre [(u/Type? cop)
          (every? u/Type? cargs)]
    :post [((some-fn nil? u/Type?) %)]}
-  (case (:op cop)
-    ; unordered intersections
-    :IFn (let [as (keep (fn [m]
-                          {:pre [(u/Fn? m)]
-                           :post [((some-fn nil? u/Type?) %)]}
-                          (when (= (count cargs)
-                                   (count (:dom m)))
-                            (when (every? identity (map subtype? cargs (:dom m)))
-                              (:rng m))))
-                        (:methods cop))]
-           (when (seq as)
-             (u/make-I as)))
-    ))
+  (let [cop (fully-resolve-type cop)]
+    (case (:op cop)
+      ; unordered intersections
+      :IFn (let [as (keep (fn [m]
+                            {:pre [(u/Fn? m)]
+                             :post [((some-fn nil? u/Type?) %)]}
+                            (when (= (count cargs)
+                                     (count (:dom m)))
+                              (when (every? identity (map subtype? cargs (:dom m)))
+                                (:rng m))))
+                          (:methods cop))]
+             (when (seq as)
+               (u/make-I as)))
+      :Poly (throw (ex-info (str "Cannot invoke polymorphic function, must instantiate: "
+                                 (unparse-type cop))
+                            {u/type-error-kw true})))))
+
+(defn check-fn [env e exp]
+  {:pre [(map? env)
+         ((every-pred seq? seq) e)
+         (u/Type? exp)]
+   :post [(u/Result? %)]}
+  (let [args (next e)
+        [plist body & more] args
+        _ (when more
+            (throw (ex-info (str "Extra arguments to 'fn': " more)
+                            {u/type-error-kw true})))
+        _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
+        _ (assert (vector? plist) (str "'fn' takes a vector of arguments, found " plist))
+        ; check body. no use for return type because entire interface is provided
+        ; for each function, so it's thrown away.
+        _ (let [exp (fully-resolve-type exp)]
+            (case (:op exp)
+              :IFn (let [_ (mapv (fn [m]
+                                   {:pre [(u/Fn? m)]}
+                                   (let [dom (:dom m)
+                                         _ (when-not (= (count plist) (count dom))
+                                             (throw (ex-info (str "Function does not match expected number of parameters"
+                                                                  "\nActual:\n\t" (count plist)
+                                                                  "\nExpected:\n\t" (count dom)
+                                                                  "\nExpected type:\n\t" (unparse-type m)
+                                                                  "\nin:\n\t" e)
+                                                             {u/type-error-kw true})))
+                                         env (merge env (zipmap plist dom))
+                                         rng (check env body)
+                                         rng-t (u/ret-t rng)
+                                         exp (:rng m)
+                                         _ (when-not (subtype? rng-t exp)
+                                             (expected-error "Unexpected function body"
+                                                             rng-t
+                                                             exp
+                                                             body))]
+                                     nil))
+                                 (:methods exp))]
+                     nil)
+              ))
+        ]
+    (u/->Result (list 'ann e (unparse-type exp))
+                exp)))
 
 (defn check [env e]
   {:pre [(map? env)]
@@ -231,41 +337,7 @@
                          ; (ann (fn ...) t)
                          (and ((every-pred seq? seq) e')
                               ('#{fn fn*} (first e')))
-                         (let [[plist body & more] (next e')
-                               _ (when more
-                                   (throw (ex-info (str "Extra arguments to 'fn': " more)
-                                                   {u/type-error-kw true})))
-                               _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
-                               _ (assert (vector? plist) (str "'fn' takes a vector of arguments, found " plist))
-                               ; check body. no use for return type because entire interface is provided
-                               ; for each function, so it's thrown away.
-                               _ (case (:op exp)
-                                   :IFn (let [_ (mapv (fn [m]
-                                                        {:pre [(u/Fn? m)]}
-                                                        (let [dom (:dom m)
-                                                              _ (when-not (= (count plist) (count dom))
-                                                                  (throw (ex-info (str "Function does not match expected number of parameters"
-                                                                                       "\nActual:\n\t" (count plist)
-                                                                                       "\nExpected:\n\t" (count dom)
-                                                                                       "\nExpected type:\n\t" (unparse-type m)
-                                                                                       "\nin:\n\t" e)
-                                                                                  {u/type-error-kw true})))
-                                                              env (merge env (zipmap plist dom))
-                                                              rng (check env body)
-                                                              rng-t (u/ret-t rng)
-                                                              exp (:rng m)
-                                                              _ (when-not (subtype? rng-t exp)
-                                                                  (expected-error "Unexpected function body"
-                                                                                  rng-t
-                                                                                  exp
-                                                                                  body))]
-                                                          nil))
-                                                      (:methods exp))]
-                                          nil)
-                                   )
-                               ]
-                           (u/->Result (list 'ann e' (unparse-type exp))
-                                       exp))
+                         (check-fn env e' exp)
 
                          ; (ann e t)
                          :else (let [r (check env e')
