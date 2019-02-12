@@ -153,15 +153,19 @@
    :post [(boolean? %)]}
   (u/subtype-Base-left?-with s t subtype?))
 
+(defn subtype-Union-Intersection? [s t]
+  {:pre [((some-fn u/Intersection? u/Union?) s t)]
+   :post [(boolean? %)]}
+  (u/subtype-Union-Intersection?-with s t subtype?))
+
 (defn subtype? [s t]
   {:pre [(u/Type? s)
          (u/Type? t)]
    :post [(boolean? %)]}
   (cond
-    (or (= s t)
-        (= u/-any t)
-        (= u/-nothing s))
-    true
+    (= s t) true
+
+    ((some-fn u/Intersection? u/Union?) s t) (subtype-Union-Intersection? s t)
 
     ((every-pred u/Seq?) s t)
     (subtype-Seq? s t)

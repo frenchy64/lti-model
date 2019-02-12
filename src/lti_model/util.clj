@@ -530,3 +530,13 @@
   (boolean
     (when-let [s (base-supers s)]
       (subtype? (make-U s) t))))
+
+(defn subtype-Union-Intersection?-with [s t subtype?]
+  {:pre [((some-fn Intersection? Union?) s t)]
+   :post [(boolean? %)]}
+  (cond
+    (Intersection? t) (every? #(subtype? s %) (:types t))
+    (Union? s)        (every? #(subtype? % t) (:types s))
+    (Intersection? s) (boolean (some #(subtype? % t) (:types s)))
+    (Union? t)        (boolean (some #(subtype? s %) (:types t)))
+    :else (throw (Exception. "impossible"))))

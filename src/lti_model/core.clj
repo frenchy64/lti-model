@@ -284,12 +284,7 @@
 (defn subtype-Union-Intersection? [s t]
   {:pre [((some-fn u/Intersection? u/Union?) s t)]
    :post [(boolean? %)]}
-  (cond
-    (u/Intersection? t) (every? #(subtype? s %) (:types t))
-    (u/Union? s)        (every? #(subtype? % t) (:types s))
-    (u/Intersection? s) (boolean (some #(subtype? % t) (:types s)))
-    (u/Union? t)        (boolean (some #(subtype? s %) (:types t)))
-    :else (throw (Exception. "impossible"))))
+  (u/subtype-Union-Intersection?-with s t subtype?))
 
 (defn subtype? [s t]
   {:pre [(:op s)
@@ -301,15 +296,11 @@
   ;(prn "s" (unparse-type s))
   ;(prn "t" (unparse-type t))
   (cond
-    (or (= s t) 
-        (= -any t)
-        (= -nothing s))
-    true
+    (= s t) true
 
     ((some-fn u/Intersection? u/Union?) s t) (subtype-Union-Intersection? s t)
 
-    (and (IFn? s)
-         (IFn? t))
+    ((every-pred IFn?) s t)
     (every? #(boolean
                (some (fn [s] (subtype-Fn? s %))
                      (:types s)))
