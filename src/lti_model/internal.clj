@@ -140,6 +140,19 @@
 (defn type-for-symbol [env e]
   (u/type-for-symbol-with env e constant-type))
 
+(declare subtype?)
+
+(defn subtype-Seq? [s t]
+  {:pre [(u/Seq? s)
+         (u/Seq? t)]
+   :post [(boolean? %)]}
+  (u/subtype-Seq?-with s t subtype?))
+
+(defn subtype-Base-left? [s t]
+  {:pre [(u/Base? s)]
+   :post [(boolean? %)]}
+  (u/subtype-Base-left?-with s t subtype?))
+
 (defn subtype? [s t]
   {:pre [(u/Type? s)
          (u/Type? t)]
@@ -149,6 +162,12 @@
         (= u/-any t)
         (= u/-nothing s))
     true
+
+    ((every-pred u/Seq?) s t)
+    (subtype-Seq? s t)
+
+    (u/Base? s)
+    (subtype-Base-left? s t)
 
     :else false))
 

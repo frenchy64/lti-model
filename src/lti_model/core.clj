@@ -269,18 +269,27 @@
     (assert nil "TODO")
     ))
 
-(defn base-supers [t]
-  {:pre [(Base? t)]
-   :post [((some-fn nil? (every-pred set? seq)) %)
-          (not (contains? % t))]}
-  ({'Int #{-Num}}
-   (:name t)))
 
 (defn subtype-Seq? [s t]
   {:pre [(u/Seq? s)
          (u/Seq? t)]
    :post [(boolean? %)]}
-  (subtype? (:type s) (:type t)))
+  (u/subtype-Seq?-with s t subtype?))
+
+(defn subtype-Base-left? [s t]
+  {:pre [(u/Base? s)]
+   :post [(boolean? %)]}
+  (u/subtype-Base-left?-with s t subtype?))
+
+(defn subtype-Union-Intersection? [s t]
+  {:pre [((some-fn u/Intersection? u/Union?) s t)]
+   :post [(boolean? %)]}
+  (cond
+    (u/Intersection? t) (every? #(subtype? s %) (:types t))
+    (u/Union? s)        (every? #(subtype? % t) (:types s))
+    (u/Intersection? s) (boolean (some #(subtype? % t) (:types s)))
+    (u/Union? t)        (boolean (some #(subtype? s %) (:types t)))
+    :else (throw (Exception. "impossible"))))
 
 (defn subtype? [s t]
   {:pre [(:op s)
@@ -297,10 +306,7 @@
         (= -nothing s))
     true
 
-    (u/Intersection? t) (every? #(subtype? s %) (:types t))
-    (u/Union? s)        (every? #(subtype? % t) (:types s))
-    (u/Intersection? s) (boolean (some #(subtype? % t) (:types s)))
-    (u/Union? t)        (boolean (some #(subtype? s %) (:types t)))
+    ((some-fn u/Intersection? u/Union?) s t) (subtype-Union-Intersection? s t)
 
     (and (IFn? s)
          (IFn? t))
@@ -313,9 +319,7 @@
     (subtype-Seq? s t)
 
     (u/Base? s)
-    (boolean
-      (when-let [s (base-supers s)]
-        (subtype? (make-U s) t)))
+    (subtype-Base-left? s t)
 
     ; This case is pretty weird because it can trigger side effects
     ; in the *closure-cache* that might end up being irrelevant.
@@ -406,7 +410,7 @@
         (make-U (set matches))))
 
     (Base? t)
-    (when-let [s (base-supers t)]
+    (when-let [s (u/base-supers t)]
       (match-dir dir (make-U s) P))
 
     (and (IFn? t)

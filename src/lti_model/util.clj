@@ -510,3 +510,23 @@
   (apply str
          (interpose (str "\n" ind)
                     (str/split-lines s))))
+
+(defn subtype-Seq?-with [s t subtype?]
+  {:pre [(Seq? s)
+         (Seq? t)]
+   :post [(boolean? %)]}
+  (subtype? (:type s) (:type t)))
+
+(defn base-supers [t]
+  {:pre [(Base? t)]
+   :post [((some-fn nil? (every-pred set? seq)) %)
+          (not (contains? % t))]}
+  ({'Int #{-Num}}
+   (:name t)))
+
+(defn subtype-Base-left?-with [s t subtype?]
+  {:pre [(Base? s)]
+   :post [(boolean? %)]}
+  (boolean
+    (when-let [s (base-supers s)]
+      (subtype? (make-U s) t))))
