@@ -32,6 +32,9 @@
          (with-out-str
            (pprint' ~e))))
 
+(defmacro evl [e]
+  `(eval-form '~e))
+
 ; dummy to evaluate code in this ns
 (defmacro ann [e t] e)
 
@@ -184,6 +187,31 @@
              (mapT inc'))))
   (is (tc-err [Int :-> Int :-> Int]
               (fn [a b c] c)))
+  )
+
+(deftest reserved-symbol-test
+  (is (thrown? AssertionError (tc ? (fn [let] let))))
+  (is (thrown? AssertionError (tc ? (fn [fn] fn))))
+  (is (thrown? AssertionError (tc ? (fn [fn*] fn*))))
+  (is (thrown? AssertionError (tc ? (fn [ann] ann))))
+  (is (thrown? AssertionError (tc ? (let [let 1] let))))
+  (is (thrown? AssertionError (tc ? (let [fn 1] fn))))
+  (is (thrown? AssertionError (tc ? (let [fn* 1] fn*))))
+  (is (thrown? AssertionError (tc ? (let [ann 1] ann)))))
+
+(deftest eval-test
+  (is (= 1 (evl 1)))
+  (is (= 2 (evl (inc 1))))
+  (is (= 2 (evl (+ 1 1))))
+  (is (= 1 (evl (app id 1))))
+  (is (= 1 (evl ((ann (fn [x] x)
+                      [Any :-> Any])
+                 1))))
+  ;closures
+  (is (= 1 (evl ((let [a 1]
+                   (ann (fn [x] a)
+                        [Any :-> Any]))
+                 2))))
   )
 
 (deftest id-cast-test

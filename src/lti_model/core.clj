@@ -7,6 +7,7 @@
                                     IFn? Base? Poly? Fn? make-U make-I
                                     type-error-kw]
              :as u]
+            [lti-model.external-eval]
             [clojure.pprint :refer [pprint]]))
 
 ; Expressions
@@ -1470,6 +1471,8 @@
 (defn type-for-symbol [env e]
   (u/type-for-symbol-with env e constant-type))
 
+(def reserved-symbols '#{ann let fn fn*})
+
 #_
 (t/ann check [P Env E :-> T])
 (defn check [P env e]
@@ -1477,7 +1480,7 @@
          (map? env)]
    :post [(u/Result? %)]}
   (cond
-    ; locals shadow globals, except when used as a special form like (ann ...)
+    ; locals shadow globals
     (symbol? e) (let [t (type-for-symbol env e)
                       m (smallest-matching-super t P)]
                   (u/->Result e (check-match t P m e)))
@@ -1522,7 +1525,12 @@
                               (throw (ex-info (str "Extra arguments to 'fn': " more)
                                               {type-error-kw true})))
                           _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
-                          _ (assert (vector? plist) (str "'fn' takes a vector of arguments, found " plist))
+                          _ (assert (and (vector? plist)
+                                         (every? symbol? plist))
+                                    (str "'fn' takes a vector of arguments, found " plist))
+                          _ (assert (not-any? reserved-symbols plist)
+                                    (str "Cannot use reserved symbol: "
+                                         (some reserved-symbols plist)))
                           r (cond
                               (= -wild P) (let [t {:op :Closure
                                                    :id (gensym 'closure)
@@ -1625,6 +1633,11 @@
                                      (u/->Result e
                                                  (check-match t P m e)))
     :else (assert nil (str "Bad expression in check: " (pr-str e)))))
+
+;assumes form is well-typed
+(defn eval-form [form]
+  (binding [*ns* (the-ns 'lti-model.external-eval)]
+    (eval form)))
 
 (comment
   (check-form -Int {} 1)

@@ -1,6 +1,7 @@
 (ns lti-model.internal
   (:require [lti-model.util :as u]
-            [clojure.pprint :as pp]))
+            [clojure.pprint :as pp]
+            [lti-model.internal-eval]))
 
 ; Expressions
 ; e ::= 
@@ -270,6 +271,8 @@
 
 (declare check)
 
+(def reserved-symbols '#{ann fn fn*})
+
 (defn check-fn [env e exp]
   {:pre [(map? env)
          ((every-pred seq? seq) e)
@@ -281,7 +284,12 @@
             (throw (ex-info (str "Extra arguments to 'fn': " more)
                             {u/type-error-kw true})))
         _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
-        _ (assert (vector? plist) (str "'fn' takes a vector of arguments, found " plist))
+        _ (assert (and (vector? plist)
+                       (every? symbol? plist))
+                  (str "'fn' takes a vector of arguments, found " plist))
+        _ (assert (not-any? reserved-symbols plist)
+                  (str "Cannot use reserved symbol: "
+                       (some reserved-symbols plist)))
         ; check body. no use for return type because entire interface is provided
         ; for each function, so it's thrown away.
         _ (let [exp (fully-resolve-type exp)]
@@ -327,6 +335,7 @@
     ((every-pred seq? seq) e)
              (let [[op & args] e]
                (case op
+                 fn (throw (Exception. (str "Function requires annotation: " e)))
                  ann (let [[e' at & more] args
                            _ (when more
                                (throw (ex-info (str "Extra arguments to 'ann': " more)
@@ -366,3 +375,8 @@
 
 (defn check-form [env e]
   (check env e))
+
+;assumes form is well-typed
+(defn eval-form [form]
+  (binding [*ns* (the-ns 'lti-model.internal-eval)]
+    (eval form)))

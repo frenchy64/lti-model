@@ -19,6 +19,9 @@
   `(subtype? (parse-type '~s)
              (parse-type '~t)))
 
+(defmacro evl [e]
+  `(eval-form '~e))
+
 (deftest tc-basics-test
   (is (= 'Int (tc 1)))
   (is (= 'Str (tc "a")))
@@ -80,6 +83,23 @@
                [1 2])))
   )
 
+(deftest eval-test
+  (is (= 1 (evl 1)))
+  (is (= 2 (evl (inc 1))))
+  (is (= 2 (evl (+ 1 1))))
+  (is (= 1 (evl (app id 1))))
+  (is (= 1 (evl ((ann (fn [x] x)
+                      [Any :-> Any])
+                 1))))
+  ;closures
+  (is (= 1 (evl (((ann (fn [a]
+                         (ann (fn [x] a)
+                              [Any :-> Any]))
+                       [Any :-> Any])
+                  1)
+                 2))))
+  )
+
 (deftest subtype-test
   (is (not (sub? Any Nothing)))
   (is (sub? Nothing Any))
@@ -93,3 +113,11 @@
   (is (u/throws-type-error? (sub? Int (Rec [b] b))))
   (is (u/throws-type-error? (sub? (Rec [b] b) Int)))
   )
+
+(deftest reserved-symbol-test
+  (is (thrown? AssertionError (tc (ann (fn [fn] fn)
+                                       [Any :-> Any]))))
+  (is (thrown? AssertionError (tc (ann (fn [fn*] fn*)
+                                       [Any :-> Any]))))
+  (is (thrown? AssertionError (tc (ann (fn [ann] ann)
+                                       [Any :-> Any])))))
