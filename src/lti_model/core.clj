@@ -239,14 +239,10 @@
 (declare subtype? check check-or-nil)
 
 (defn subtype-Fn? [s t]
-  {:pre [(= :Fn (:op s))
-         (= :Fn (:op t))]
+  {:pre [(u/Fn? s)
+         (u/Fn? t)]
    :post [(boolean? %)]}
-  (and (= (count (:dom s))
-          (count (:dom t)))
-       (every? identity
-               (map subtype? (:dom t) (:dom s)))
-       (subtype? (:rng s) (:rng t))))
+  (u/subtype-Fn?-with s t subtype?))
 
 (declare substitution-for-variances)
 
@@ -286,6 +282,11 @@
    :post [(boolean? %)]}
   (u/subtype-Union-Intersection?-with s t subtype?))
 
+(defn subtype-IFn? [s t]
+  {:pre [((every-pred IFn?) s t)]
+   :post [(boolean? %)]}
+  (u/subtype-IFn?-with s t subtype-Fn?))
+
 (defn subtype? [s t]
   {:pre [(:op s)
          (:op t)
@@ -300,17 +301,11 @@
 
     ((some-fn u/Intersection? u/Union?) s t) (subtype-Union-Intersection? s t)
 
-    ((every-pred IFn?) s t)
-    (every? #(boolean
-               (some (fn [s] (subtype-Fn? s %))
-                     (:types s)))
-            (:types t))
+    ((every-pred IFn?) s t) (subtype-IFn? s t)
 
-    ((every-pred u/Seq?) s t)
-    (subtype-Seq? s t)
+    ((every-pred u/Seq?) s t) (subtype-Seq? s t)
 
-    (u/Base? s)
-    (subtype-Base-left? s t)
+    (u/Base? s) (subtype-Base-left? s t)
 
     ; This case is pretty weird because it can trigger side effects
     ; in the *closure-cache* that might end up being irrelevant.
@@ -406,11 +401,13 @@
 
     (and (IFn? t)
          (IFn? P))
-    (let [matches (mapv #(some
+    (let [mths (:methods P)
+          _ (assert (vector? P))
+          matches (mapv #(some
                            (fn [t]
                              (match-dir-Fn dir t %))
                            (:methods t))
-                        (:methods P))]
+                        mths)]
       (when (every? :op matches)
         {:op :IFn
          :methods matches}))

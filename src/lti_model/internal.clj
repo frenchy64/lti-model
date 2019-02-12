@@ -158,6 +158,17 @@
    :post [(boolean? %)]}
   (u/subtype-Union-Intersection?-with s t subtype?))
 
+(defn subtype-Fn? [s t]
+  {:pre [(u/Fn? s)
+         (u/Fn? t)]
+   :post [(boolean? %)]}
+  (u/subtype-Fn?-with s t subtype?))
+
+(defn subtype-IFn? [s t]
+  {:pre [((every-pred u/IFn?) s t)]
+   :post [(boolean? %)]}
+  (u/subtype-IFn?-with s t subtype-Fn?))
+
 (defn subtype? [s t]
   {:pre [(u/Type? s)
          (u/Type? t)]
@@ -167,11 +178,11 @@
 
     ((some-fn u/Intersection? u/Union?) s t) (subtype-Union-Intersection? s t)
 
-    ((every-pred u/Seq?) s t)
-    (subtype-Seq? s t)
+    ((every-pred u/IFn?) s t) (subtype-IFn? s t)
 
-    (u/Base? s)
-    (subtype-Base-left? s t)
+    ((every-pred u/Seq?) s t) (subtype-Seq? s t)
+
+    (u/Base? s) (subtype-Base-left? s t)
 
     :else false))
 

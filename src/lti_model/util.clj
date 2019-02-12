@@ -540,3 +540,26 @@
     (Intersection? s) (boolean (some #(subtype? % t) (:types s)))
     (Union? t)        (boolean (some #(subtype? s %) (:types t)))
     :else (throw (Exception. "impossible"))))
+
+(defn subtype-Fn?-with [s t subtype?]
+  {:pre [(Fn? s)
+         (Fn? t)]
+   :post [(boolean? %)]}
+  (and (= (count (:dom s))
+          (count (:dom t)))
+       (every? identity
+               (map subtype?
+                    (:dom t)
+                    (:dom s)))
+       (subtype? (:rng s)
+                 (:rng t))))
+
+(defn subtype-IFn?-with [s t subtype-Fn?]
+  {:pre [((every-pred IFn?) s t)]
+   :post [(boolean? %)]}
+  (let [ms (:methods t)
+        _ (assert (vector? ms))]
+    (every? #(boolean
+               (some (fn [s] (subtype-Fn? s %))
+                     (:methods s)))
+            ms)))

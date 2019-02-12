@@ -18,6 +18,10 @@
      (do (tc ~P ~e)
          false)))
 
+(defmacro sub? [s t]
+  `(subtype? (parse-type '~s)
+             (parse-type '~t)))
+
 (defn pprint' [e]
   (binding [*print-length* nil
             *print-level* nil]
@@ -38,6 +42,9 @@
          (unfold (parse-type '(Rec [x] x)))))
   (is (= (parse-type '[(Rec [x] [x :-> x]) :-> (Rec [x] [x :-> x])])
          (unfold (parse-type '(Rec [x] [x :-> x]))))))
+
+(deftest subtype-test
+  (is (not (sub? [:-> Any] [:-> Nothing]))))
 
 (deftest check-test
   (is (= 'Int

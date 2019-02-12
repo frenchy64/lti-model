@@ -15,7 +15,11 @@
      (do (tc ~e)
          false)))
 
-(deftest tc-basics
+(defmacro sub? [s t]
+  `(subtype? (parse-type '~s)
+             (parse-type '~t)))
+
+(deftest tc-basics-test
   (is (= 'Int (tc 1)))
   (is (= 'Str (tc "a")))
   (is (= '(Seq Str) (tc ["a"])))
@@ -29,6 +33,11 @@
   (is (tc-err (ann ["a" 1] Str)))
   ;ann
   (is (= 'Int (tc (ann 1 Int))))
+  (is (= '[:-> Any] (tc (ann (ann (fn [] "a") [:-> Str])
+                             [:-> Any]))))
+  (is (tc-err (ann (ann (fn [] "a")
+                        [:-> Str])
+                   [:-> Nothing])))
   ;TODO (is (= 'Num (tc (ann 1 Num))))
   ;app
   (is (= 'Int (tc (inc 1))))
@@ -44,4 +53,11 @@
   #_;TODO
   (is (tc-err (map (ann (fn [e] e) [Int :-> Int])
                    [1 2])))
+  )
+
+(deftest subtype-test
+  (is (not (sub? Any Nothing)))
+  (is (sub? Nothing Any))
+  (is (sub? [:-> Nothing] [:-> Any]))
+  (is (not (sub? [:-> Any] [:-> Nothing])))
   )
