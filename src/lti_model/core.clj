@@ -9,14 +9,18 @@
              :as u]
             [clojure.pprint :refer [pprint]]))
 
-; e ::=              ; Expressions
-;       c            ; constant functions
-;     | n            ; integers
-;     | (fn [x *] e) ; functions
+; Expressions
+; e ::=               
+;       c             ; constant functions
+;     | n             ; integers
+;     | sym           ; locals
+;     | (fn [x *] e)  ; functions
 ;     | (let [x e] e) ; let
-;     | (ann e t)    ; type ascription
-;     | [e *]        ; sequences
-; t ::=                    ; Types
+;     | (ann e t)     ; type ascription
+;     | [e *]         ; sequences
+
+; Types
+; t ::=     
 ;       (IFn [t * :-> t]+) ;ordered intersection function types
 ;     | [t * :-> t]        ;function type
 ;     | a                  ;type variables
@@ -25,9 +29,16 @@
 ;     | (U t *)            ;unions
 ;     | (I t *)            ;intersections
 ;     | (Seq t)            ;sequences
-;     | (Closure Env e)    ;delayed untyped functions
+;     | (Closure Env e)    ;symbolic closures
 ;     | (PApp t t *)       ;instantiation of polymorphic types
-; P ::=                    ; Prototypes
+;     | (All [x+] t)       ;polymorphic types
+
+; Type Abbreviations
+;  Any = (I)
+;  Nothing = (U)
+
+; Prototypes
+; P ::=
 ;       ?                  ;wildcard
 ;     | (IFn [P * :-> P]+) ;ordered intersection function types
 ;     | [P * :-> P]        ;function type
@@ -36,9 +47,7 @@
 ;     | (U P *)            ;unions
 ;     | (I P *)            ;intersections
 ;     | (Seq t)            ;sequences
-; s ::= (All [x+] (IFn [t * :-> t]+)) ;type schemes
-; Any = (I)
-; Nothing = (U)
+
 
 #_
 (t/defalias Scope

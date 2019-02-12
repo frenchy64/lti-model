@@ -36,10 +36,10 @@
 (defmacro ann [e t] e)
 
 (deftest Mu-test
-  (is (= '(Rec [x] x)
-         (unparse-type (parse-type '(Rec [x] x)))))
-  (is (= (parse-type '(Rec [x] x))
-         (unfold (parse-type '(Rec [x] x)))))
+  (is (= '(Rec [x] [x :-> x])
+         (unparse-type (parse-type '(Rec [x] [x :-> x])))))
+  ;infinite
+  (is (u/throws-type-error? (parse-type '(Rec [x] x))))
   (is (= (parse-type '[(Rec [x] [x :-> x]) :-> (Rec [x] [x :-> x])])
          (unfold (parse-type '(Rec [x] [x :-> x]))))))
 

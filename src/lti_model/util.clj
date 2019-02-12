@@ -10,6 +10,13 @@
             (~f e#)
             (throw e#)))))
 
+(defmacro throws-type-error? [e]
+  `(handle-type-error (fn [^Exception e#]
+                        ;(println (.getMessage e#))
+                        true)
+     (do ~e
+         false)))
+
 (defn Type? [t] (and (map? t) (keyword? (:op t))))
 
 #_
@@ -56,6 +63,7 @@
 (make-op-predicate Mu)
 (make-op-predicate F)
 (make-op-predicate PApp)
+(make-op-predicate Scope)
 
 ; Poly -> (Vec F)
 (defn Poly-frees [p]

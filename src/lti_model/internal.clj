@@ -2,34 +2,30 @@
   (:require [lti-model.util :as u]
             [clojure.pprint :as pp]))
 
-; e ::=                    ; Expressions
-;       c                  ; constant functions
-;     | n                  ; integers
-;     | (ann (fn [x *] e) t) ; functions
-;     | (ann e t)          ; type ascription
-;     | [e *]              ; sequences
-;     | (inst-case e (case (enclosing-fn-arity n) t [t *] *))       ; polymorphic type instantiation
+; Expressions
+; e ::= 
+;       c                    ; constant functions
+;     | n                    ; integers
+;     | sym                  ; locals
+;     | (ann (fn [x *] e) t) ; annotated functions
+;     | (ann e t)            ; type ascription
+;     | [e *]                ; sequences
 
-#_
-(fn {:interface (IFn [-> [Int -> [Int -> Int]]]
-                     [-> [Bool -> [Bool -> Bool]]])}
-  []
-  (fn {:interface (case (enclosing-fn-arity 0)
-                    [-> [Int -> [Int -> Int]]] [Int -> [Int -> Int]]
-                    [-> [Bool -> [Bool -> Bool]]] [Bool -> [Bool -> Bool]])}
-    [x]
-    (fn {:interface (case (enclosing-fn-arity 0)
-                      [Int -> [Int -> Int]] [Int -> Int]
-                      [Bool -> [Bool -> Bool]] [Bool -> Bool])}
-      [y] y)))
+;Types
+; t ::= 
+;       (IFn [t * :-> t]+) ;ordered intersection function types
+;     | [t * :-> t]        ;function type
+;     | a                  ;type variables
+;     | Int                ;integers
+;     | Num                ;numbers
+;     | (U t *)            ;unions
+;     | (I t *)            ;intersections
+;     | (Seq t)            ;sequences
+;     | (PApp t t *)       ;instantiation of polymorphic types
 
-; foo : (U (All [a] [a -> a]) (All [b] [b -> b]))
-
-; ((inst foo) 1)
-; ((ann-poly foo  ;required that foo must be of the below type, but with PInst+type arguments erased
-;            (U (PInst (All [a] [a -> a]) Int)
-;               (PInst (All [b] [b -> b]) Int)))
-;  1)
+; Type Abbreviations
+;  Any = (I)
+;  Nothing = (U)
 
 ; Name T -> Scope
 (defn abstract [n t]
@@ -50,7 +46,7 @@
 
 ; T Scope -> T
 (defn instantiate [image t]
-  {:pre [(= :Scope (:op t))
+  {:pre [(u/Scope? t)
          (u/Type? image)]
    :post [(u/Type? %)]}
   (u/instantiate-by image t
@@ -73,6 +69,8 @@
   (apply u/Poly*-by syms t abstract-all args))
 (defn Mu* [sym t & args]
   (apply u/Mu*-by sym t abstract args))
+
+(declare unparse-type)
 
 ; Any -> T
 (defn parse-type [t]
@@ -269,6 +267,8 @@
       :Poly (throw (ex-info (str "Cannot invoke polymorphic function, must instantiate: "
                                  (unparse-type cop))
                             {u/type-error-kw true})))))
+
+(declare check)
 
 (defn check-fn [env e exp]
   {:pre [(map? env)

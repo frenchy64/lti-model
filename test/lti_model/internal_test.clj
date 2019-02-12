@@ -8,15 +8,12 @@
 (defmacro tc [e]
   `(unparse-type (u/ret-t (check-form {} '~e))))
 
-(defmacro throws-type-error? [e]
+(defmacro tc-err [e]
   `(u/handle-type-error (fn [^Exception e#]
                           (println (.getMessage e#))
                           true)
-     (do ~e
+     (do (tc ~e)
          false)))
-
-(defmacro tc-err [e]
-  `(throws-type-error? (tc ~e)))
 
 (defmacro sub? [s t]
   `(subtype? (parse-type '~s)
@@ -92,7 +89,7 @@
             [(Rec [b] [b :-> b]) :-> (Rec [c] [c :-> c])]))
   (is (not (sub? (Rec [a] [a :-> a])
                  [Int :-> Int])))
-  (is (throws-type-error? (sub? (Rec [a] a) (Rec [b] b))))
-  (is (throws-type-error? (sub? Int (Rec [b] b))))
-  (is (throws-type-error? (sub? (Rec [b] b) Int)))
+  (is (u/throws-type-error? (sub? (Rec [a] a) (Rec [b] b))))
+  (is (u/throws-type-error? (sub? Int (Rec [b] b))))
+  (is (u/throws-type-error? (sub? (Rec [b] b) Int)))
   )
