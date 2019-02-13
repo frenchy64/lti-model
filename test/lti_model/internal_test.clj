@@ -81,6 +81,14 @@
                           Int))
                (ann (fn [e] e) [Int :-> Int])
                [1 2])))
+  ; EnclosingFnCase
+  (is (tc (ann (fn [x]
+                 (ann (fn [y] x)
+                      (EnclosingFnCase 0
+                        [Int :-> [Int :-> Int]] [Int :-> Int]
+                        [Str :-> [Str :-> Str]] [Str :-> Str])))
+               (IFn [Int :-> [Int :-> Int]]
+                    [Str :-> [Str :-> Str]]))))
   )
 
 (deftest eval-test

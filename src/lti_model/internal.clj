@@ -71,24 +71,36 @@
 (defn Mu* [sym t & args]
   (apply u/Mu*-by sym t abstract args))
 
-(declare unparse-type)
+(declare unparse-type resolve-EnclosingFnCase)
 
 ; Any -> T
 (defn parse-type [t]
-  (cond
-    (and (seq? t)
-         ('#{PApp} (first t))
-         (next t))
-    (let [[_ psyn & targssyn] t
-          p (parse-type psyn)
-          _ (assert (u/Poly? p) (unparse-type p))
-          targs (mapv parse-type targssyn)]
-      {:op :PApp
-       :poly p
-       :args targs})
-    :else (u/parse-type-by t {:Poly* Poly*
-                              :Mu* Mu*
-                              :parse-type parse-type})))
+  (let [default-fn #(u/parse-type-by t {:Poly* Poly*
+                                        :Mu* Mu*
+                                        :parse-type parse-type})
+        special-case (and (seq? t)
+                          (next t)
+                          ('#{PApp EnclosingFnCase} (first t)))]
+    (cond
+      special-case
+      (case special-case
+        PApp
+        (let [[_ psyn & targssyn] t
+              p (parse-type psyn)
+              _ (assert (u/Poly? p) (unparse-type p))
+              targs (mapv parse-type targssyn)]
+          {:op :PApp
+           :poly p
+           :args targs})
+        EnclosingFnCase
+        (let [[_ i & cases] t
+              _ (assert (even? (count cases)))
+              case-pairs (vec (partition 2 (map parse-type cases)))]
+          (resolve-EnclosingFnCase
+            {:op :EnclosingFnCase
+             :i i
+             :cases case-pairs})))
+      :else (default-fn))))
 
 (defn Poly-constraints [p images]
   {:pre [(= :Poly (:op p))
@@ -103,6 +115,10 @@
 ; T -> Any
 (defn unparse-type [t]
   (case (:op t)
+    :EnclosingFnCase (list* 'EnclosingFnCase (:i t)
+                            (->> (:cases t)
+                                 (mapcat identity)
+                                 (map unparse-type)))
     (u/unparse-type-by t 
                        {:Poly-frees u/Poly-frees
                         :Poly-body Poly-body
@@ -189,7 +205,7 @@
   (u/unfold-by m {:Mu-body Mu-body
                   :subst subst}))
 
-(def resolvable? (some-fn u/Mu? u/PApp?))
+(def ^:dynamic *enclosing-fn-stack* [])
 
 (defn apply-PApp [p]
   {:pre [(u/PApp? p)]
@@ -199,6 +215,36 @@
         _ (assert (u/Poly? poly))
         _ (assert (vector args))]
     (Poly-body poly args)))
+
+(defn resolvable-EnclosingFnCase? [t]
+  {:pre [(u/EnclosingFnCase? t)]
+   :post [(boolean? %)]}
+  (< (:i t) (count *enclosing-fn-stack*)))
+
+(defn resolve-EnclosingFnCase [t]
+  {:pre [(u/EnclosingFnCase? t)
+         (resolvable-EnclosingFnCase? t)]
+   :post [(u/Type? %)]}
+  (let [stack *enclosing-fn-stack*
+        depth (:i t)
+        _ (assert (nat-int? depth)
+                  (pr-str depth))
+        _ (assert (< depth (count stack))
+                  [depth (count stack)])
+        cases (:cases t)
+        _ (assert (vector? cases))
+        enclosing-case (stack depth)
+        _ (assert (u/Type? enclosing-case))]
+    (u/make-I (keep (fn [[l r]]
+                      ; eg. (EnclosingFnCase i l r) => r
+                      ;     if enclosing-case <: l
+                      (when (subtype? enclosing-case l)
+                        r))
+                    cases))))
+
+;Note: EnclosingFnCase are resolved immediately in `parse-type`, and
+;      so should not appear here
+(def resolvable? (some-fn u/Mu? u/PApp?))
 
 (defn resolve-type [t]
   {:pre [(u/Type? t)]
@@ -221,7 +267,8 @@
 
 (defn subtype? [s t]
   {:pre [(u/Type? s)
-         (u/Type? t)]
+         (u/Type? t)
+         (not ((some-fn u/EnclosingFnCase?) s t))]
    :post [(boolean? %)]}
   (if (or (*subtype-seen* [s t])
           (= s t))
@@ -254,6 +301,20 @@
    :post [((some-fn nil? u/Type?) %)]}
   (let [cop (fully-resolve-type cop)]
     (case (:op cop)
+      :Union (let [ts (:types cop)
+                   _ (assert (some? ts))
+                   rngs (mapv #(check-app % cargs) ts)]
+               (when (every? u/Type? rngs)
+                 (u/make-U rngs)))
+      :Intersection (let [ts (:types cop)
+                          _ (assert (some? ts))
+                          rngs (vec
+                                 (keep #(u/handle-type-error
+                                          (fn [_] nil)
+                                          (check-app % cargs))
+                                       ts))]
+                      (when (seq rngs)
+                        (u/make-I rngs)))
       ; unordered intersections
       :IFn (let [as (keep (fn [m]
                             {:pre [(u/Fn? m)]
@@ -292,32 +353,37 @@
                        (some reserved-symbols plist)))
         ; check body. no use for return type because entire interface is provided
         ; for each function, so it's thrown away.
-        _ (let [exp (fully-resolve-type exp)]
-            (case (:op exp)
-              :IFn (let [_ (mapv (fn [m]
-                                   {:pre [(u/Fn? m)]}
-                                   (let [dom (:dom m)
-                                         _ (when-not (= (count plist) (count dom))
-                                             (throw (ex-info (str "Function does not match expected number of parameters"
-                                                                  "\nActual:\n\t" (count plist)
-                                                                  "\nExpected:\n\t" (count dom)
-                                                                  "\nExpected type:\n\t" (unparse-type m)
-                                                                  "\nin:\n\t" e)
-                                                             {u/type-error-kw true})))
-                                         env (merge env (zipmap plist dom))
-                                         rng (check env body)
-                                         rng-t (u/ret-t rng)
-                                         exp (:rng m)
-                                         _ (when-not (subtype? rng-t exp)
-                                             (expected-error "Unexpected function body"
-                                                             rng-t
-                                                             exp
-                                                             body))]
-                                     nil))
-                                 (:methods exp))]
-                     nil)
-              ))
-        ]
+        _ ((fn chk-fn [exp]
+             (let [exp (fully-resolve-type exp)]
+               (case (:op exp)
+                 :Intersection (let [rs (mapv chk-fn (:types exp))]
+                                 (u/make-I (map u/ret-t rs)))
+                 :IFn (let [_ (mapv (fn [m]
+                                      {:pre [(u/Fn? m)]}
+                                      (let [dom (:dom m)
+                                            _ (when-not (= (count plist) (count dom))
+                                                (throw (ex-info (str "Function does not match expected number of parameters"
+                                                                     "\nActual:\n\t" (count plist)
+                                                                     "\nExpected:\n\t" (count dom)
+                                                                     "\nExpected type:\n\t" (unparse-type m)
+                                                                     "\nin:\n\t" e)
+                                                                {u/type-error-kw true})))
+                                            env (merge env (zipmap plist dom))
+                                            rng (binding [*enclosing-fn-stack* (conj *enclosing-fn-stack*
+                                                                                     {:op :IFn
+                                                                                      :methods [m]})]
+                                                  (check env body))
+                                            rng-t (u/ret-t rng)
+                                            exp (:rng m)
+                                            _ (when-not (subtype? rng-t exp)
+                                                (expected-error "Unexpected function body"
+                                                                rng-t
+                                                                exp
+                                                                (pr-str body)))]
+                                        nil))
+                                    (:methods exp))]
+                        nil))))
+           exp)]
     (u/->Result (list 'ann e (unparse-type exp))
                 exp)))
 

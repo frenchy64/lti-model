@@ -64,6 +64,7 @@
 (make-op-predicate F)
 (make-op-predicate PApp)
 (make-op-predicate Scope)
+(make-op-predicate EnclosingFnCase)
 
 ; Poly -> (Vec F)
 (defn Poly-frees [p]
@@ -92,7 +93,7 @@
    :post [(Type? %)]}
   (let [ts (set
              (mapcat (fn [t]
-                       (if (= :Union (:op t))
+                       (if (Union? t)
                          (:types t)
                          [t]))
                      ts))
@@ -111,7 +112,7 @@
   {:pre [(every? Type? ts)]
    :post [(Type? %)]}
   (let [ts (mapcat (fn [t]
-                     (if (= :Intersection (:op t))
+                     (if (Intersection? t)
                        (:types t)
                        [t]))
                    ts)
@@ -377,7 +378,7 @@
                        (binding [*tvar* (into *tvar* syms)]
                          (Mu* (first syms) (parse-type t))))
                  IFn (let [methods (mapv parse-fn-arity (rest t))]
-                       (assert (seq methods))
+                       ;(assert (seq methods)) ; (IFn) <=> AnyFunction
                        {:op :IFn
                         :methods methods}))
       ('#{Int} t) -Int

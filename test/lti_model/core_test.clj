@@ -3,13 +3,16 @@
             [clojure.pprint :refer [pprint]]
             [clojure.walk :as walk]
             [lti-model.core :refer :all :as lti]
+            [lti-model.internal :as in]
             [lti-model.util :as u]))
 
+(defmacro prs [s] `(parse-type '~s))
+
 (defmacro tc [P e]
-  `(unparse-type (u/ret-t (check-form (parse-type '~P) {} '~e))))
+  `(unparse-type (u/ret-t (check-form (prs ~P) {} '~e))))
 
 (defmacro tc-exp [P e]
-  `(u/ret-e (check-form (parse-type '~P) {} '~e)))
+  `(u/ret-e (check-form (prs ~P) {} '~e)))
 
 (defmacro tc-err [P e]
   `(u/handle-type-error (fn [^Exception e#]
@@ -17,6 +20,29 @@
                           true)
      (do (tc ~P ~e)
          false)))
+
+(defn compatible? [v1 v2]
+  (cond
+    (= v1 v2) true
+    ((every-pred fn?) v1 v2) true
+    ((every-pred coll?) v1 v2) (and (= (count v1) (count v2))
+                                    (every? identity
+                                            (map compatible?
+                                                 v1
+                                                 v2)))
+    :else false))
+
+(defmacro tc+elab [P e]
+  `(let [e# '~e
+         P# '~P
+         r-ex# (check-form (parse-type P#) {} e#)
+         e-val# (eval-form e#)
+         r-in# (in/check-form {} (u/ret-e r-ex#))
+         i-val# (in/eval-form (u/ret-e r-ex#))]
+     (assert (compatible? e-val# i-val#)
+             (str "Not compatible results: "
+                  i-val# " <=> " e-val#))
+     (u/ret-e r-ex#)))
 
 (defmacro sub? [s t]
   `(subtype? (parse-type '~s)
@@ -1076,12 +1102,21 @@
   )
 
 (defn symbol-count [d]
-  (let [a (atom 0)]
-    (walk/postwalk
-      #(when (symbol? %)
-         (swap! a inc))
-      d)
-    @a))
+  (when (some? d)
+    (let [a (atom 0)]
+      (walk/postwalk
+        #(when (symbol? %)
+           (swap! a inc))
+        d)
+      @a)))
+
+(defn node-count [d]
+  (when (some? d)
+    (let [a (atom 0)]
+      (walk/postwalk
+        (fn [_] (swap! a inc))
+        d)
+      @a)))
 
 ;from Kanellakis & Mitchell [POPL 1989]
 ; Example 3.1 - composing (lambda encoded) pairs, let-free
@@ -1356,34 +1391,34 @@
 
 #_
 (deftest elaboration-test
-  (is (= 1 (tc-exp ? 1)))
-  (is (= 'inc (tc-exp ? inc)))
+  (is (= 1 (tc+elab ? 1)))
+  (is (= 'inc (tc+elab ? inc)))
   (is (= '(ann (fn [a] a) (IFn))
-         (tc-exp ? (fn [a] a))))
+         (tc+elab ? (fn [a] a))))
   (is (= '((ann (fn [a] a)
                 [Int :-> Int])
            1)
-         (tc-exp ? (let [a 1] a))))
+         (tc+elab ? (let [a 1] a))))
   (is (= '[1 ((ann (fn [a] a)
                    [Int :-> Int])
               1)]
-         (tc-exp ? [1 (let [a 1] a)])))
+         (tc+elab ? [1 (let [a 1] a)])))
   (is (= '[1 ((ann (fn [a] ((ann (fn [b] a)
                                  [Int :-> Int])
                             2))
                    [Int :-> Int])
               1)]
-         (tc-exp ? [1 (let [a 1 b 2] a)])))
+         (tc+elab ? [1 (let [a 1 b 2] a)])))
   (is (= '(ann ((ann (fn [a] a)
                      [Int :-> Int])
                 1)
                Int)
-         (tc-exp ? (ann (let [a 1] a) Int))))
+         (tc+elab ? (ann (let [a 1] a) Int))))
   (is (= '(ann (fn [a] ((ann (fn [a] a)
                              [Int :-> Int]) 1))
                [Int :-> Int])
-         (tc-exp ? (ann (fn [a] (let [a 1] a))
-                        [Int :-> Int]))))
+         (tc+elab ? (ann (fn [a] (let [a 1] a))
+                         [Int :-> Int]))))
   (is (= '((ann (fn [f] [(f 1) (f "a")])
                 [(IFn [Int :-> Int]
                       [Str :-> Str])
@@ -1391,8 +1426,8 @@
            (ann (fn [x] x)
                 (IFn [Int :-> Int]
                      [Str :-> Str])))
-         (tc-exp ? (let [f (fn [x] x)]
-                     [(f 1) (f "a")]))))
+         (tc+elab ? (let [f (fn [x] x)]
+                      [(f 1) (f "a")]))))
   (is (= '((ann (fn [f] [((f 1) 2) ((f "a") "b")])
                 [(IFn [Int :-> [Int :-> Int]]
                       [Str :-> [Str :-> Str]])
@@ -1404,16 +1439,16 @@
                          [Str :-> Any] [Str :-> Str])))
                 (IFn [Int :-> [Int :-> Int]]
                      [Str :-> [Str :-> Str]])))
-         (tc-exp ? (let [f (fn [x] (fn [y] x))]
-                     [((f 1) 2) ((f "a") "b")]))))
+         (tc+elab ? (let [f (fn [x] (fn [y] x))]
+                      [((f 1) 2) ((f "a") "b")]))))
   (is (= '(ann (fn [a] ((ann (fn [a] a)
                              [Int :-> Int])
                         1))
                (IFn [Int :-> Int]
                     [Str :-> Int]))
-         (tc-exp ? (ann (fn [a] (let [a 1] a))
-                        (IFn [Int :-> Int]
-                             [Str :-> Int])))))
+         (tc+elab ? (ann (fn [a] (let [a 1] a))
+                         (IFn [Int :-> Int]
+                              [Str :-> Int])))))
   (is (= '(ann (fn [a]
                  ((ann (fn [a]
                          ((ann (fn [b] a)
@@ -1423,22 +1458,74 @@
                   1))
                (IFn [Int :-> Int]
                     [Str :-> Int]))
-         (tc-exp ? (ann (fn [a] (let [a 1 b 2] a))
-                        (IFn [Int :-> Int]
-                             [Str :-> Int])))))
+         (tc+elab ? (ann (fn [a] (let [a 1 b 2] a))
+                         (IFn [Int :-> Int]
+                              [Str :-> Int])))))
   ; smallest case of recursive function type, with elaboration
-  (is (tc-exp ? (let [f (fn [f] f)]
-                  (f f))))
+  (is (tc+elab ? (let [f (fn [f] f)]
+                   (f f))))
   ; nested recursive function types (but references are not nested)
-  (is (tc-exp ? (let [f (fn [f] f)
-                      g (fn [g] g)]
-                  ((f f) (g g)))))
+  (is (tc+elab ? (let [f (fn [f] f)
+                       g (fn [g] g)]
+                   ((f f) (g g)))))
   ; interestingly nested recursive types (like `(Rec [x] [:-> (Rec [y] [x -> y])])`)
+  (is (tc+elab ? (let [f (fn [f]
+                           (fn [g]
+                             (f g)))]
+                   (f f))))
+  ;FIXME elaboration does not type check
   (is (tc-exp ? (let [f (fn [f]
                           (fn [g]
-                            (f g)))
-                      g (fn [g] g)]
+                            (f g)))]
                   ((f f) f))))
+  ; the following elaborations exhibit exponential growth in the annotations
+  (is (node-count
+        (tc-exp ? (let [f (fn [f]
+                            (fn [g]
+                              (f g)))]
+                    (f f)))))
+  (is (node-count
+        (tc-exp ? (let [f (fn [f]
+                            (fn [g]
+                              (f g)))]
+                    ((f f) f)))))
+  (is (node-count 
+        (tc-exp ? (let [f (fn [f]
+                            (fn [g]
+                              (f g)))]
+                    (((f f) f) f)))))
+  (is (node-count
+        (tc-exp ? (let [f (fn [f]
+                            (fn [g]
+                              (f g)))]
+                    ((((f f) f) f) f)))))
+  (is (node-count
+        (tc-exp ? (let [f (fn [f]
+                            (fn [g]
+                              (f g)))]
+                    (((((f f) f) f) f) f)))))
+  (is (node-count
+        (tc-exp ? (let [f (fn [f]
+                            (fn [g]
+                              (f g)))]
+                    ((((((f f) f) f) f) f) f)))))
+  ;each of the following elaborations have identical annotation
+  ; for `f`: (Rec [r] [r :-> r])
+  (is (node-count
+        (tc+elab ? (let [f (fn [g] g)]
+                     (f f)))))
+  (is (node-count
+        (tc+elab ? (let [f (fn [g] g)]
+                     ((f f) f)))))
+  (is (node-count
+        (tc+elab ? (let [f (fn [g] g)]
+                     (((f f) f) f)))))
+  (is (node-count
+        (tc+elab ? (let [f (fn [g] g)]
+                     ((((f f) f) f) f)))))
+  (is (node-count
+        (tc+elab ? (let [f (fn [f] f)]
+                     (((((f f) f) f) f) f)))))
   ; recursive function type intersected with [Int -> Int]
   ; Note that [Int -> Int] is part of the recursive type. Is this correct?
   (is (tc-exp ?
