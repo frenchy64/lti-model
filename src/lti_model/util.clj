@@ -48,6 +48,7 @@
 (def -Num {:op :Base :name 'Num})
 (def -any {:op :Intersection :types #{}})
 (def -nothing {:op :Union :types #{}})
+(def -anyfunction {:op :IFn :methods []})
 
 (defmacro ^:private make-op-predicate [nme]
   `(defn ~(symbol (str nme "?")) [t#]
@@ -116,10 +117,21 @@
                        (:types t)
                        [t]))
                    ts)
+        ; (I Any t) => t
         ts (disj (set ts)
-                 -any)]
+                 -any)
+        ; (I (IFn) (IFn <arities>)) => (IFn <arities>)
+        ts (if (and (contains? ts -anyfunction)
+                    (some (fn [t]
+                            (and (IFn? t)
+                                 (seq (:methods t))))
+                          ts))
+             (disj ts -anyfunction)
+             ts)]
     (cond
+      ; (I Nothing t) => Nothing
       (contains? ts -nothing) -nothing
+      ; (I t) => t
       (= (count ts) 1) (first ts)
       :else {:op :Intersection
              :types ts})))

@@ -357,7 +357,8 @@
              (let [exp (fully-resolve-type exp)]
                (case (:op exp)
                  :Intersection (let [rs (mapv chk-fn (:types exp))]
-                                 (u/make-I (map u/ret-t rs)))
+                                 (when (every? identity rs)
+                                   (u/make-I (map u/ret-t rs))))
                  :IFn (let [_ (mapv (fn [m]
                                       {:pre [(u/Fn? m)]}
                                       (let [dom (:dom m)

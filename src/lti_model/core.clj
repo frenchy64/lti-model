@@ -1034,7 +1034,9 @@
                                       _ (assert (seq actuals))
                                       t {:op :Fn
                                          :dom args
-                                         :rng (make-U actuals)}]
+                                         ; intersection ranges -- equivalent to having separate
+                                         ; arities for each dom-rng pair
+                                         :rng (make-I actuals)}]
                                   (cond
                                     (*currently-elaborating-closures* cop)
                                     (let [{:keys [flag rec-sym]} (*currently-elaborating-closures* cop)

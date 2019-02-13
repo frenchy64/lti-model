@@ -1,0 +1,101 @@
+;ideal annotation:
+(let [f (ann (fn [f]
+               (fn [g]
+                 (f g)))
+             (Rec [r]
+               [r :-> [r :-> r]]))]
+  ((f f) f))
+
+;actual annotation:
+(let [f (ann (fn [f]
+               (fn [g]
+                 (f g)))
+             (Rec [r]
+               (IFn [r :-> (U (IFn) [r :-> (IFn)])])))]
+  ((f f) f))
+
+n = 1
+
+(let [f (fn [f]
+         (fn [g]
+          (f g)))]
+ (f f))
+
+((ann (fn [f] (f f)) [(Rec [rec35643] [rec35643 :-> (IFn)]) :-> (IFn)])
+ (ann
+  (fn [f] (ann (fn [g] (f g)) (IFn)))
+  (Rec [rec35653] [rec35653 :-> (IFn)])))
+
+; pprinted
+
+(let [f (ann
+          (fn [f]
+            (ann (fn [g] (f g)) (IFn)))
+          (Rec [rec35653] [rec35653 :-> (IFn)]))]
+ (ann (f f)) (IFn))
+
+(let [f (fn :ann (Rec [rec35653] [rec35653 :-> (IFn)])
+          [f]
+          (fn :ann (IFn)
+            [g]
+            (f g)))]
+  (f f))
+
+;((fn [b] body) v)
+;=>
+;(let [b v] body)
+
+n = 2
+
+(let [f (fn [f]
+          (fn [g]
+            (f g)))]
+  ((f f) f))
+
+;((ann
+;  (fn [f] ((f f) f))
+;  [(Rec [rec35719] [rec35719 :-> (U (IFn) [rec35719 :-> (IFn)])])
+;   :->
+;   (IFn)])
+; (ann
+;  (fn
+;   [f]
+;   (ann
+;    (fn [g] (f g))
+;    (EnclosingFnCase
+;     0
+;     [(Rec [rec35727] [rec35727 :-> (U (IFn) [rec35727 :-> (IFn)])])
+;      :->
+;      Any]
+;     (Rec
+;      [rec35734]
+;      [(Rec [rec35735] [rec35735 :-> (U (IFn) rec35734)]) :-> (IFn)])
+;     [(Rec [rec35742] [rec35742 :-> (U (IFn) [rec35742 :-> (IFn)])])
+;      :->
+;      Any]
+;     (IFn))))
+;  (Rec [rec35750] [rec35750 :-> (U (IFn) [rec35750 :-> (IFn)])])))
+
+(let [f (ann
+         (fn
+          [f]
+          (ann
+           (fn [g] (f g))
+           (EnclosingFnCase
+            0
+            [(Rec [rec35727] [rec35727 :-> (U (IFn) [rec35727 :-> (IFn)])])
+            :->
+            Any]
+            (Rec
+             [rec35734]
+             [(Rec [rec35735] [rec35735 :-> (U (IFn) rec35734)]) :-> (IFn)])
+            [(Rec [rec35742] [rec35742 :-> (U (IFn) [rec35742 :-> (IFn)])])
+            :->
+            Any]
+            (IFn))))]
+  (Rec [rec35750] [rec35750 :-> (U (IFn) [rec35750 :-> (IFn)])]))
+  ((f f) f))
+  [(Rec [rec35719] [rec35719 :-> (U (IFn) [rec35719 :-> (IFn)])])
+   :->
+   (IFn)])
+ )

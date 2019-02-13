@@ -1480,31 +1480,34 @@
                   ((f f) f))))
   ; the following elaborations exhibit exponential growth in the annotations
   (is (node-count
-        (tc-exp ? (let [f (fn [f]
-                            (fn [g]
-                              (f g)))]
-                    (f f)))))
+        (tc+elab ? (let [f (fn [f]
+                             (fn [g]
+                               (f g)))]
+                     (f f)))))
   (is (node-count
-        (tc-exp ? (let [f (fn [f]
-                            (fn [g]
-                              (f g)))]
-                    ((f f) f)))))
+        (tc+elab ? (let [f (fn [f]
+                             (fn [g]
+                               (f g)))]
+                     ((f f) f)))))
   (is (node-count 
-        (tc-exp ? (let [f (fn [f]
-                            (fn [g]
-                              (f g)))]
-                    (((f f) f) f)))))
+        (tc+elab ? (let [f (fn [f]
+                             (fn [g]
+                               (f g)))]
+                     (((f f) f) f)))))
   (is (node-count
-        (tc-exp ? (let [f (fn [f]
-                            (fn [g]
-                              (f g)))]
-                    ((((f f) f) f) f)))))
+        ;slow!
+        (tc+elab ? (let [f (fn [f]
+                             (fn [g]
+                               (f g)))]
+                     ((((f f) f) f) f)))))
   (is (node-count
+        ;FIXME too slow to elaborate
         (tc-exp ? (let [f (fn [f]
                             (fn [g]
                               (f g)))]
                     (((((f f) f) f) f) f)))))
   (is (node-count
+        ;FIXME too slow to elaborate
         (tc-exp ? (let [f (fn [f]
                             (fn [g]
                               (f g)))]
