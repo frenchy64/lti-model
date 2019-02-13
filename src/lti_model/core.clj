@@ -1035,7 +1035,11 @@
                                       t {:op :Fn
                                          :dom args
                                          ; intersection ranges -- equivalent to having separate
-                                         ; arities for each dom-rng pair
+                                         ; arities for each dom-rng pair.
+                                         ; eg. (IFn [Int -> Int]
+                                         ;          [Int -> Num])
+                                         ;     =>
+                                         ;     (IFn [Int -> (I Num Int)])
                                          :rng (make-I actuals)}]
                                   (cond
                                     (*currently-elaborating-closures* cop)

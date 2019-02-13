@@ -1479,16 +1479,16 @@
                             (f g)))]
                   ((f f) f))))
   ; the following elaborations exhibit exponential growth in the annotations
-  (is (node-count
-        (tc+elab ? (let [f (fn [f]
-                             (fn [g]
-                               (f g)))]
-                     (f f)))))
-  (is (node-count
-        (tc+elab ? (let [f (fn [f]
-                             (fn [g]
-                               (f g)))]
-                     ((f f) f)))))
+  (is ((juxt pprint' node-count)
+        (tc+elab ? (let [call (fn [f]
+                                (fn [g]
+                                  (f g)))]
+                     (call call)))))
+  (is ((juxt pprint' node-count)
+       (tc+elab ? (let [call (fn [f]
+                               (fn [g]
+                                 (f g)))]
+                    ((call call) call)))))
   (is (node-count 
         (tc+elab ? (let [f (fn [f]
                              (fn [g]
