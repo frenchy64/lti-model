@@ -204,6 +204,9 @@
                (if *unparse-closure-by-id*
                  (list ::ClosureByID (:id t))
                  (list 'Closure (unparse-env (:env t)) (:expr t))))
+    :TypeCase (list* 'TypeCase (unparse-type (:t t))
+                     (mapcat #(map unparse-type %) (:cases t)))
+    :EnclosingFnType (list 'EnclosingFn (:i t))
     (u/unparse-type-by t 
                        {:Poly-frees Poly-frees
                         :Poly-body Poly-body
@@ -1045,6 +1048,8 @@
                                     (*currently-elaborating-closures* cop)
                                     (let [{:keys [flag rec-sym]} (*currently-elaborating-closures* cop)
                                           _ (reset! flag true)]
+                                      ;FIXME this seems buggy because below we use the return 
+                                      ; of this function as a Fn? in an IFn?.
                                       {:op :F :name rec-sym})
 
                                     :else (binding [*currently-elaborating-closures*
@@ -1053,6 +1058,7 @@
                                                              {:rec-sym this-rec-sym
                                                               :flag this-flag})]
                                               (elaborated-type closure-cache t)))))
+        ;FIXME use a constructor for IFn that checks Fn? methods
         t {:op :IFn
            :methods (into []
                           (comp ; resolve an arity for this symbolic closure
@@ -1288,7 +1294,7 @@
 
 (declare check resolve-symbolic-closures)
 
-(def ^:dynamic *simplify-EnclosingFnCase* nil)
+(def ^:dynamic *simplify-TypeCase* nil)
 (def ^:dynamic *disable-elaboration* nil)
 
 (defn check-form [P env e]
@@ -1301,8 +1307,8 @@
       (if *disable-elaboration*
         e
         (let [r (resolve-symbolic-closures @*closure-cache* e)
-              ; prematurely simplifies EnclosingFnCase if enabled above
-              r (binding [*simplify-EnclosingFnCase* true]
+              ; prematurely simplifies TypeCase if enabled above
+              r (binding [*simplify-TypeCase* true]
                   (resolve-symbolic-closures @*closure-cache* r))]
           r)))))
 
@@ -1312,13 +1318,13 @@
   (u/handle-type-error (constantly nil)
     (check P env e)))
 
-(declare merge-enclosing-fn-cases)
+(declare merge-TypeCases)
 
 ; dirty-tree-walk expression e and resolve symbolic closures
 (defn resolve-symbolic-closures [closure-cache e]
   {:pre [(map? closure-cache)]}
   ;postwalk because suggested-annotation-for-closure already traverses its result
-  ; to resolve closures, and so we can also simplify EnclosingFnCase types
+  ; to resolve closures, and so we can also simplify TypeCase types
   (walk/postwalk (fn [e]
                    (cond
                      ;expand symbolic closure bodies
@@ -1335,7 +1341,7 @@
                                          (vec ffrms))
                                frms (mapv #(resolve-symbolic-closures closure-cache %)
                                           (apply concat ffrms))]
-                           (merge-enclosing-fn-cases frms))))
+                           (merge-TypeCases frms))))
 
                      ;expand symbolic closure types
                      (and (seq? e)
@@ -1352,11 +1358,11 @@
                        #_(resolve-symbolic-closures closure-cache e)
                        e)
 
-                     ;simplify EnclosingFnCase types
-                     (and *simplify-EnclosingFnCase*
+                     ;simplify TypeCase types
+                     (and *simplify-TypeCase*
                           (seq? e)
-                          (= 'EnclosingFnCase (first e))
-                          (integer? (second e)))
+                          (= 'TypeCase (first e))
+                          (next e))
                      (let [[_ _ & fn-cases] e
                            _ (assert (even? (count fn-cases)))
                            cases-paired (partition 2 fn-cases)]
@@ -1388,7 +1394,7 @@
                 (if (seq stack)
                   (recur (inc n)
                          (pop stack)
-                         (list 'EnclosingFnCase n
+                         (list 'TypeCase (list 'EnclosingFn n)
                                (binding [*unparse-disallow-wildcard* true]
                                  (unparse-type (peek stack)))
                                t))
@@ -1401,10 +1407,9 @@
   (and (seq? e)
        (= 'ann (first e))
        (= 3 (count e))))
-(defn EnclosingFnCase-form? [e]
+(defn TypeCase-form? [e]
   (and (seq? e)
-       (= 'EnclosingFnCase (first e))
-       (integer? (second e))
+       (= 'TypeCase (first e))
        (<= 4 (count e))))
 
 (defn ClosureFormsByID-form? [e]
@@ -1414,20 +1419,20 @@
        (map? (second e))))
 
 ; (Seqable Any) -> Any
-; dirty-tree-walk to merge EnclosingFnCase forms in arbitrary expressions/types
+; dirty-tree-walk to merge TypeCase forms in arbitrary expressions/types
 ; depends on: 
 ; 1. (list 'ann e1 e2) only ever is an ann form
 ;    - local bindings cannot shadow first-order usages of 'ann
 ;    - I don't think it can appear in a type
 ; 2. (list ::ClosureFormsByID {:original-form f, :ids [syms ...]}) only ever is a placeholder for a symbolic closure form
-; 3. (list 'EnclosingFnCase i c1-q c1-a, c2-q c2-a ...) is always an EnclosingFnCase type
-(defn merge-enclosing-fn-cases [es]
+; 3. (list 'TypeCase t c1-q c1-a, c2-q c2-a ...) is always a TypeCase type
+(defn merge-TypeCases [es]
   {:pre [(seq es)]}
   (let [add-ann-left (fn [e1 e2]
                        {:pre [(ann-form? e1)]}
                        (let [[ann e t] e1]
                          (list ann
-                               (merge-enclosing-fn-cases [e e2])
+                               (merge-TypeCases [e e2])
                                t)))]
     (reduce (fn [e1 e2]
               ;(prn "e1" e1)
@@ -1441,7 +1446,7 @@
                 ;extra 'ann on the right
                 (and (ann-form? e2) (not (ann-form? e1))) (add-ann-left e2 e1)
 
-                (and ((every-pred EnclosingFnCase-form?) e1 e2)
+                (and ((every-pred TypeCase-form?) e1 e2)
                      (apply = (map second [e1 e2])))
                 (let [[_ _ & e2-cases] e2]
                   (concat e1 e2-cases))
@@ -1460,13 +1465,13 @@
                      (vector? e2)
                      (= (count e1)
                         (count e2)))
-                (mapv #(merge-enclosing-fn-cases %&) e1 e2)
+                (mapv #(merge-TypeCases %&) e1 e2)
 
                 (and (seq? e1)
                      (seq? e2)
                      (= (count e1)
                         (count e2)))
-                (doall (map #(merge-enclosing-fn-cases %&) e1 e2))
+                (doall (map #(merge-TypeCases %&) e1 e2))
 
                 :else (throw (Exception. (str "Cannot unify fn cases: " e1 " " e2)))
                 ))
@@ -1591,7 +1596,7 @@
                                              es (map u/ret-e methodrs)
                                              _ (assert (seq es))
                                              ;_ (do (prn "merging") (mapv prn es))
-                                             e (merge-enclosing-fn-cases es)]
+                                             e (merge-TypeCases es)]
                                          ;(prn "=>")
                                          ;(prn e)
                                          (u/->Result e t))

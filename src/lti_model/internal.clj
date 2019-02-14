@@ -80,26 +80,27 @@
                                         :parse-type parse-type})
         special-case (and (seq? t)
                           (next t)
-                          ('#{PApp EnclosingFnCase} (first t)))]
+                          ('#{PApp TypeCase} (first t)))]
     (cond
       special-case
       (case special-case
         PApp
-        (let [[_ psyn & targssyn] t
+        (let [[psyn & targssyn :as args] (rest t)
+              _ (assert (seq args))
               p (parse-type psyn)
               _ (assert (u/Poly? p) (unparse-type p))
               targs (mapv parse-type targssyn)]
           {:op :PApp
            :poly p
            :args targs})
-        EnclosingFnCase
-        (let [[_ i & cases] t
+        TypeCase
+        (let [[t & cases :as args] (rest t)
+              _ (assert (seq args))
               _ (assert (even? (count cases)))
               case-pairs (vec (partition 2 (map parse-type cases)))]
-          (resolve-EnclosingFnCase
-            {:op :EnclosingFnCase
-             :i i
-             :cases case-pairs})))
+          {:op :TypeCase
+           :t (parse-type t)
+           :cases case-pairs}))
       :else (default-fn))))
 
 (defn Poly-constraints [p images]
@@ -115,10 +116,11 @@
 ; T -> Any
 (defn unparse-type [t]
   (case (:op t)
-    :EnclosingFnCase (list* 'EnclosingFnCase (:i t)
-                            (->> (:cases t)
-                                 (mapcat identity)
-                                 (map unparse-type)))
+    :TypeCase (list* 'TypeCase (unparse-type (:t t))
+                     (->> (:cases t)
+                          (mapcat identity)
+                          (map unparse-type)))
+    :EnclosingFnType (list 'EnclosingFn (:i t))
     (u/unparse-type-by t 
                        {:Poly-frees u/Poly-frees
                         :Poly-body Poly-body
@@ -205,8 +207,6 @@
   (u/unfold-by m {:Mu-body Mu-body
                   :subst subst}))
 
-(def ^:dynamic *enclosing-fn-stack* [])
-
 (defn apply-PApp [p]
   {:pre [(u/PApp? p)]
    :post [(u/Type? %)]}
@@ -216,41 +216,32 @@
         _ (assert (vector args))]
     (Poly-body poly args)))
 
-(defn resolvable-EnclosingFnCase? [t]
-  {:pre [(u/EnclosingFnCase? t)]
-   :post [(boolean? %)]}
-  (< (:i t) (count *enclosing-fn-stack*)))
 
-(defn resolve-EnclosingFnCase [t]
-  {:pre [(u/EnclosingFnCase? t)
-         (resolvable-EnclosingFnCase? t)]
+(defn resolve-TypeCase [t]
+  {:pre [(u/TypeCase? t)]
    :post [(u/Type? %)]}
-  (let [stack *enclosing-fn-stack*
-        depth (:i t)
-        _ (assert (nat-int? depth)
-                  (pr-str depth))
-        _ (assert (< depth (count stack))
-                  [depth (count stack)])
+  (let [subject (:t t)
+        _ (assert (u/Type? subject)
+                  t)
         cases (:cases t)
-        _ (assert (vector? cases))
-        enclosing-case (stack depth)
-        _ (assert (u/Type? enclosing-case))]
+        _ (assert (vector? cases))]
     (u/make-I (keep (fn [[l r]]
-                      ; eg. (EnclosingFnCase i l r) => r
-                      ;     if enclosing-case <: l
-                      (when (subtype? enclosing-case l)
+                      ; eg. (TypeCase subject l r) => r
+                      ;     if t <: l
+                      (when (subtype? subject l)
                         r))
                     cases))))
 
-;Note: EnclosingFnCase are resolved immediately in `parse-type`, and
+;Note: EnclosingFn are resolved immediately in `parse-type`, and
 ;      so should not appear here
-(def resolvable? (some-fn u/Mu? u/PApp?))
+(def resolvable? (some-fn u/Mu? u/PApp? u/TypeCase?))
 
 (defn resolve-type [t]
   {:pre [(u/Type? t)]
    :post [(u/Type? %)]}
   (case (:op t)
     :Mu (unfold t)
+    :TypeCase (resolve-TypeCase t)
     :PApp (apply-PApp t)))
 
 (defn fully-resolve-type
@@ -279,6 +270,9 @@
 
         (u/Mu? s) (subtype? (unfold s) t)
         (u/Mu? t) (subtype? s (unfold t))
+
+        (u/TypeCase? s) (subtype? (resolve-TypeCase s) t)
+        (u/TypeCase? t) (subtype? s (resolve-TypeCase t))
 
         (and (u/Poly? s)
              (u/PApp? t))
@@ -370,9 +364,9 @@
                                                                      "\nin:\n\t" e)
                                                                 {u/type-error-kw true})))
                                             env (merge env (zipmap plist dom))
-                                            rng (binding [*enclosing-fn-stack* (conj *enclosing-fn-stack*
-                                                                                     {:op :IFn
-                                                                                      :methods [m]})]
+                                            rng (binding [u/*enclosing-fn-stack* (conj u/*enclosing-fn-stack*
+                                                                                       {:op :IFn
+                                                                                        :methods [m]})]
                                                   (check env body))
                                             rng-t (u/ret-t rng)
                                             exp (:rng m)
@@ -440,8 +434,13 @@
                                      {u/type-error-kw true}))))))
     :else (assert nil (str "Bad expression in check: " (pr-str e)))))
 
+(def ^:dynamic *in-check-form* false)
+
 (defn check-form [env e]
-  (check env e))
+  (assert (not *in-check-form*))
+  (binding [u/*enclosing-fn-stack* []
+            *in-check-form* true]
+    (check env e)))
 
 ;assumes form is well-typed
 (defn eval-form [form]

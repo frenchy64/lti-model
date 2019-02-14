@@ -1389,7 +1389,6 @@
          (tc ? (app2 +' 1 (ann 2 Num)))))
 )
 
-#_
 (deftest elaboration-test
   (is (= 1 (tc+elab ? 1)))
   (is (= 'inc (tc+elab ? inc)))
@@ -1434,7 +1433,7 @@
                  :-> (Seq (U Int Str))])
            (ann (fn [x]
                   (ann (fn [y] x)
-                       (EnclosingFnCase 0
+                       (TypeCase (EnclosingFn 0)
                          [Int :-> Any] [Int :-> Int]
                          [Str :-> Any] [Str :-> Str])))
                 (IFn [Int :-> [Int :-> Int]]
@@ -1556,6 +1555,8 @@
                           (fn [y']
                             ;return 1
                             1)))))))))))
+;TODO
+#_
   (is (= '((ann map (PApp (All [a b] [[a :-> b] (Seq a) :-> (Seq b)]) Int Int)) inc [1 2 3])
          (tc-exp ? (map inc [1 2 3]))))
   )

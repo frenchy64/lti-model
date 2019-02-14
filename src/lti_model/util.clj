@@ -66,6 +66,8 @@
 (make-op-predicate PApp)
 (make-op-predicate Scope)
 (make-op-predicate EnclosingFnCase)
+(make-op-predicate EnclosingFnType)
+(make-op-predicate TypeCase)
 
 ; Poly -> (Vec F)
 (defn Poly-frees [p]
@@ -364,6 +366,31 @@
 
 (def ^:dynamic *tvar* #{})
 
+(defn make-TypeCase [t cases]
+  {:pre [(Type? t)
+         (vector? cases)
+         (every? #(and (= 2 (count %))
+                       (every? Type? %))
+                 cases)]
+   :post [(Type? %)]}
+  {:op :TypeCase
+   :t t
+   :cases cases})
+
+(defn make-EnclosingFnType [n]
+  {:pre [(nat-int? n)]
+   :post [(Type? %)]}
+  {:op :EnclosingFnType
+   :i n})
+
+(def ^:dynamic *enclosing-fn-stack* [])
+
+(defn resolve-EnclosingFnType [t]
+  {:pre [(EnclosingFnType? t)]
+   :post [(Type? %)]}
+  (assert (< (:i t) (count *enclosing-fn-stack*)))
+  (*enclosing-fn-stack* (:i t)))
+
 (defn parse-type-by [t {:keys [Poly* Mu* parse-type]}]
   (let [parse-fn-arity (fn [t]
                          {:pre [(vector? t)]}
@@ -389,6 +416,16 @@
                        (assert (= 1 (count syms)))
                        (binding [*tvar* (into *tvar* syms)]
                          (Mu* (first syms) (parse-type t))))
+                 TypeCase (let [[t & cases :as args] (rest t)
+                                _ (assert (<= 1 (count args)))
+                                _ (assert (even? (count cases)))]
+                            (make-TypeCase (parse-type t)
+                                           (vec (partition 2 (map parse-type cases)))))
+                 EnclosingFn (let [[i :as args] (rest t)
+                                   _ (assert (nat-int? i))
+                                   _ (= 1 (count args))]
+                               (resolve-EnclosingFnType
+                                 (make-EnclosingFnType i)))
                  IFn (let [methods (mapv parse-fn-arity (rest t))]
                        ;(assert (seq methods)) ; (IFn) <=> AnyFunction
                        {:op :IFn
