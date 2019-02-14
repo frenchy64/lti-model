@@ -249,7 +249,7 @@
 (defn fv [t]
   (u/fv-by t {:fv-variances fv-variances}))
 
-(declare subtype? check check-or-nil)
+(declare subtype? check maybe-check-symbolic-closure)
 
 (defn subtype-Fn? [s t]
   {:pre [(u/Fn? s)
@@ -325,7 +325,7 @@
     ; Perhaps the Closure is called with a wrong number of arguments,
     ; and then we suggest an annotation with the wrong number of args.
     ;FIXME need unit tests that pass even though a Closure failed to check
-    (Closure? s) (boolean (check-or-nil t (:env s) (:expr s)))
+    (Closure? s) (boolean (maybe-check-symbolic-closure t s))
     :else false))
 
 (declare match-dir)
@@ -422,8 +422,7 @@
                            (:methods t))
                         mths)]
       (when (every? :op matches)
-        {:op :IFn
-         :methods matches}))
+        (apply u/make-IFn matches)))
 
     (and (Poly? t)
          (IFn? P))
@@ -462,7 +461,7 @@
     ;FIXME need unit tests that pass even though a Closure failed to check
     ;FIXME need to update the closure-cache to make this an explicit subtyping check in internal language
     (Closure? t)
-    (some-> (check-or-nil P (:env t) (:expr t))
+    (some-> (maybe-check-symbolic-closure P t)
             u/ret-t)
 
     (and (= :Seq (:op t))
@@ -665,8 +664,7 @@
                    :original-names (mapv :original-name gs)
                    :constraints pconstraints
                    :bounds bounds))
-    :IFn (update t :methods (fn [ms]
-                              (mapv #(promote-demote dir V %) ms)))
+    :IFn (apply u/make-IFn (mapv #(promote-demote dir V %) (:methods t)))
     :Fn (-> t
             (update :dom (fn [dom]
                            (mapv #(promote-demote (flip-dir dir) V %)
@@ -1005,9 +1003,9 @@
 ;                         :optional  {:forms (Vec Any)
 ;                                     :actual-rngs (Map CExpected (Set T))})))
 (def ^:dynamic *closure-cache* nil)
-(def ^:dynamic *reduction-limit* 20)
+(def ^:dynamic *reduction-limit* 100)
 (def ^:dynamic *global-reduction-counter* nil)
-(def ^:dynamic *global-reduction-limit* 100)
+(def ^:dynamic *global-reduction-limit* 1000)
 
 (declare suggest-annotation)
 
@@ -1044,28 +1042,35 @@
                                          ;     =>
                                          ;     (IFn [Int -> (I Num Int)])
                                          :rng (make-I actuals)}]
-                                  (cond
-                                    (*currently-elaborating-closures* cop)
-                                    (let [{:keys [flag rec-sym]} (*currently-elaborating-closures* cop)
-                                          _ (reset! flag true)]
+                                  (if-let [{:keys [flag rec-sym]} (*currently-elaborating-closures* cop)]
+                                    (let [_ (reset! flag true)]
                                       ;FIXME this seems buggy because below we use the return 
                                       ; of this function as a Fn? in an IFn?.
                                       {:op :F :name rec-sym})
-
-                                    :else (binding [*currently-elaborating-closures*
-                                                      (assoc *currently-elaborating-closures*
-                                                             cop
-                                                             {:rec-sym this-rec-sym
-                                                              :flag this-flag})]
-                                              (elaborated-type closure-cache t)))))
-        ;FIXME use a constructor for IFn that checks Fn? methods
-        t {:op :IFn
-           :methods (into []
-                          (comp ; resolve an arity for this symbolic closure
-                                (map (comp fn-type-from-expected key))
-                                ; now resolve duplicates, crucially after all symbolic closures are resolved.
-                                (distinct))
-                          expecteds)}
+                                    (binding [*currently-elaborating-closures*
+                                              (assoc *currently-elaborating-closures*
+                                                     cop
+                                                     {:rec-sym this-rec-sym
+                                                      :flag this-flag})]
+                                      (elaborated-type closure-cache t)))))
+        ms-and-ts (into []
+                        (comp ; resolve an arity for this symbolic closure
+                              (map (comp fn-type-from-expected key))
+                              ; now resolve duplicates, crucially after all symbolic closures are resolved.
+                              (distinct))
+                        expecteds)
+        groups (group-by u/Fn? ms-and-ts)
+        _ (assert (every? boolean? (keys groups)))
+        ms (get groups true)
+        _ (assert (every? u/Fn? ms))
+        ts (get groups false)
+        _ (assert (every? u/F? ts))
+        t (if (and (seq ts)
+                   (empty? ms))
+            ; simplify (I (IFn) rec) => rec, since rec must be a function
+            ; when unrolled (since it is a placeholder for the elaboration of a symbolic closure)
+            (u/make-I ts)
+            (u/make-I (cons (apply u/make-IFn ms) ts)))
         t (cond
             @this-flag (Mu* this-rec-sym t)
             :else t)]
@@ -1107,19 +1112,16 @@
                       -any)]
               (suggest-annotation
                 closure-cache
-                {:op :IFn
-                 :methods [{:op :Fn
-                            :dom args
-                            :rng rng}]}))
+                (u/make-IFn
+                  (u/make-Fn args rng))))
           
           ; if argument count is always the same, just suggest a [Any_0 Any_1 ... Any_n :-> Any]
           ; annotation
           (and (seq expecteds)
                (apply = (map (comp count :args) (keys expecteds))))
-          {:op :IFn
-           :methods [{:op :Fn
-                      :dom (repeat (-> expecteds keys first :args count) -any)
-                      :rng -any}]}
+          (u/make-IFn
+            (u/make-Fn (vec (repeat (-> expecteds keys first :args count) -any))
+                       -any))
 
           ;otherwise we have no idea. maybe `?` is better here, but users can't write `?`.
           :else -any)))))
@@ -1162,8 +1164,13 @@
 
 (def ^:dynamic *enclosing-fn-stack* [])
 
-; T T (Seqable T) -> (U nil '{:rng-t T})
-(defn solve-app [P cop cargs]
+(declare check-symbolic-closure)
+
+; T T (Seqable T) -> (U nil '{:rng-t T :interface T})
+(defn solve-app 
+  "Solves |- (cop cargs ...) : P => res
+  where res is a Result with the elaboration and actual type."
+  [P cop cargs]
   {:pre [(u/Type? P)
          (u/Type? cop)
          (every? u/Type? cargs)]
@@ -1188,65 +1195,18 @@
               :interface (make-I (map :interface sols))})
     :Base (throw (ex-info (str "Cannot invoke " (unparse-type cop))
                           {type-error-kw true}))
-    :Closure (let [_ (assert *closure-cache*)
-                   id (:id cop)
-                   enclosing-fn-stack (:enclosing-fn-stack cop)
-                   ;_ (prn "checking closure" id)
-                   _ (assert (symbol? id))
-                   _ (some-> *closure-cache*
-                       (swap! (fn [closure-cache]
-                                (update closure-cache id
-                                  (fn [{i :reduction-count :as m}]
-                                    (let [i ((fnil inc 0) i)]
-                                      (if (some-> *reduction-limit*
-                                                  (< i))
-                                        (throw (ex-info (str "Exceeded 'fn' checking limit, consider annotating: " (:expr cop)
-                                                             (closure-report closure-cache cop)
-                                                             ;"\n" (mapv unparse-type cargs)
-                                                             )
-                                                        {type-error-kw true}))
-                                        (-> m
-                                            (assoc :reduction-count i)
-                                            (update :expecteds update {:args cargs :ret P} (fnil inc 0))))))))))
-                   _ (some-> *global-reduction-counter*
-                             (swap! (fn [i]
-                                      (let [i (inc i)]
-                                        (if (some-> *global-reduction-limit*
-                                                    (< i))
-                                          (throw (ex-info (str "Exceeded 'fn' global checking limit, consider annotating: " (:expr cop)
-                                                               (some-> *closure-cache* deref (closure-report cop))
-                                                               ;"\n" (mapv unparse-type cargs)
-                                                               )
-                                                          {type-error-kw true}))
-                                          i)))))
-
-                   rifn (binding [*enclosing-fn-stack* enclosing-fn-stack]
-                          (check {:op :IFn
-                                  :methods [{:op :Fn
-                                             :dom cargs
-                                             :rng P}]}
-                                 (:env cop)
-                                 (:expr cop)))
+    :Closure (let [rifn (check-symbolic-closure
+                          (u/make-IFn
+                            (u/make-Fn cargs P))
+                          cop)
                    ifn (u/ret-t rifn)
-                   eifn (u/ret-e rifn)
                    _ (assert (and (IFn? ifn)
                                   (= 1 (count (:methods ifn)))))
                    m (first (:methods ifn))
                    actual-rng (:rng m)
-                   _ (assert (u/Type? actual-rng))
-                   _ (some-> *closure-cache*
-                       (swap! assoc-in [id :original-form] (:expr cop)))
-                   _ (some-> *closure-cache*
-                       (swap! update-in [id :forms] (fnil conj []) eifn))
-                   _ (some-> *closure-cache*
-                       (swap! update-in [id :actual-rngs {:args cargs :ret P}]
-                              (fn [actual-rngs]
-                                (conj (or actual-rngs #{}) actual-rng))))]
-               ;(prn "intermediate cache" @*closure-cache*)
-               {:interface {:op :IFn
-                            :methods [{:op :Fn
-                                       :dom cargs
-                                       :rng actual-rng}]}
+                   _ (assert (u/Type? actual-rng))]
+               {:interface (u/make-IFn
+                             (u/make-Fn cargs actual-rng))
                 :rng-t actual-rng})
     :IFn (some (fn [m]
                  {:pre [(Fn? m)]}
@@ -1255,8 +1215,7 @@
                    (when (every? identity (map subtype? cargs (:dom m)))
                      (when-let [rng-t (smallest-matching-super (:rng m) P)]
                        {:rng-t rng-t
-                        :interface {:op :IFn
-                                    :methods [m]}}))))
+                        :interface (u/make-IFn m)}))))
                (:methods cop))
     :Poly (let [gs (Poly-frees cop)
                 gs-names (map :name gs)
@@ -1280,8 +1239,7 @@
                      {:rng-t rng-t
                       :interface {:op :PApp
                                   :poly (Poly* (mapv :name gs)
-                                               {:op :IFn
-                                                :methods [interface]}
+                                               (u/make-IFn interface)
                                                :original-names (mapv :original-name gs)
                                                :constraints pconstraints
                                                :bounds pbounds)
@@ -1311,12 +1269,6 @@
               r (binding [*simplify-TypeCase* true]
                   (resolve-symbolic-closures @*closure-cache* r))]
           r)))))
-
-; T Env E -> (U nil Result)
-(defn check-or-nil [P env e]
-  {:post [((some-fn nil? u/Result?) %)]}
-  (u/handle-type-error (constantly nil)
-    (check P env e)))
 
 (declare merge-TypeCases)
 
@@ -1484,6 +1436,80 @@
 
 (def reserved-symbols '#{ann let fn fn*})
 
+;P Closure -> Result
+(defn check-symbolic-closure [P-interface clos]
+  {:pre [(u/Type? P-interface)
+         (Closure? clos)]
+   :post [(u/Result? %)]}
+  ;(prn "checking closure " (:expr clos) "at" (unparse-type P-interface))
+  (let [_ (when-not (u/IFn? P-interface)
+            (throw (ex-info (str "Expected function type annotation for function" (:expr clos)
+                                 ", found "(unparse-type P-interface))
+                            {type-error-kw true})))
+        _ (assert (= 1 (count (:methods P-interface))))
+        mth (first (:methods P-interface))
+        cargs (:dom mth)
+        P (:rng mth)
+        _ (assert (and (vector? cargs) (every? u/Type? cargs)))
+        _ (assert (u/Type? P))
+        enclosing-fn-stack (:enclosing-fn-stack clos)
+        _ (assert *closure-cache*)
+        id (:id clos)
+        ;_ (prn "checking closure" id)
+        _ (assert (symbol? id))
+        _ (some-> *closure-cache*
+                  (swap! (fn [closure-cache]
+                           (update closure-cache id
+                                   (fn [{i :reduction-count :as m}]
+                                     (let [i ((fnil inc 0) i)]
+                                       (if (some-> *reduction-limit*
+                                                   (< i))
+                                         (throw (ex-info (str "Exceeded 'fn' checking limit, consider annotating: " (:expr clos)
+                                                              (closure-report closure-cache clos)
+                                                              ;"\n" (mapv unparse-type cargs)
+                                                              )
+                                                         {type-error-kw true}))
+                                         (-> m
+                                             (assoc :reduction-count i)
+                                             (update :expecteds update {:args cargs :ret P} (fnil inc 0))))))))))
+        _ (some-> *global-reduction-counter*
+                  (swap! (fn [i]
+                           (let [i (inc i)]
+                             (if (some-> *global-reduction-limit*
+                                         (< i))
+                               (throw (ex-info (str "Exceeded 'fn' global checking limit, consider annotating: " (:expr clos)
+                                                    (some-> *closure-cache* deref (closure-report clos))
+                                                    ;"\n" (mapv unparse-type cargs)
+                                                    )
+                                               {type-error-kw true}))
+                               i)))))
+        rifn (binding [*enclosing-fn-stack* enclosing-fn-stack]
+               (check P-interface (:env clos) (:expr clos)))
+        ifn (u/ret-t rifn)
+        eifn (u/ret-e rifn)
+        _ (assert (and (IFn? ifn)
+                       (= 1 (count (:methods ifn)))))
+        m (first (:methods ifn))
+        actual-rng (:rng m)
+        _ (assert (u/Type? actual-rng))
+        _ (some-> *closure-cache*
+                  (swap! assoc-in [id :original-form] (:expr clos)))
+        _ (some-> *closure-cache*
+                  (swap! update-in [id :forms] (fnil conj []) eifn))
+        _ (some-> *closure-cache*
+                  (swap! update-in [id :actual-rngs {:args cargs :ret P}]
+                         (fn [actual-rngs]
+                           (conj (or actual-rngs #{}) actual-rng))))]
+    rifn
+    ))
+
+(defn maybe-check-symbolic-closure [P clos]
+  {:pre [(u/Type? P)
+         (Closure? clos)]
+   :post [((some-fn nil? u/Result?) %)]}
+  (u/handle-type-error (constantly nil)
+    (check-symbolic-closure P clos)))
+
 #_
 (t/ann check [P Env E :-> T])
 (defn check [P env e]
@@ -1547,7 +1573,15 @@
                                                    :id (gensym 'closure)
                                                    :enclosing-fn-stack *enclosing-fn-stack*
                                                    :env env
-                                                   :expr e}]
+                                                   :expr e}
+                                                ; check at [Nothing ... :-> ?] to collect minimal annotation
+                                                ; if this closure is never exercised
+                                                #_#_
+                                                _ (check-symbolic-closure
+                                                    (u/make-IFn
+                                                      (u/make-Fn (vec (repeat (count plist) u/-nothing))
+                                                                 -wild))
+                                                    t)]
                                             (u/->Result (list 'ann
                                                               (list ::ClosureFormsByID
                                                                     {:original-form e
@@ -1591,8 +1625,8 @@
                                                                          :rng rng))))
                                                             (:methods P))
                                              _ (assert (seq methodrs))
-                                             t {:op :IFn
-                                                :methods (mapv u/ret-t methodrs)}
+                                             t (apply u/make-IFn
+                                                      (mapv u/ret-t methodrs))
                                              es (map u/ret-e methodrs)
                                              _ (assert (seq es))
                                              ;_ (do (prn "merging") (mapv prn es))

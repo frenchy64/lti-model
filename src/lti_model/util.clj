@@ -69,6 +69,32 @@
 (make-op-predicate EnclosingFnType)
 (make-op-predicate TypeCase)
 
+(defn make-Fn [dom rng]
+  {:pre [(vector? dom)
+         (every? Type? dom)
+         (Type? rng)]
+   :post [(Type? %)]}
+  {:op :Fn
+   :dom dom
+   :rng rng})
+
+(defn make-IFn [& methods]
+  {:pre [(every? Fn? methods)]
+   :post [(Type? %)]}
+  (let [methods (distinct methods)
+        dom-counts (group-by (comp count :dom) methods)
+        ; remove [Nothing ... -> t] methods if there are already
+        ; arities that handle them at other types
+        methods (if (< 1 (count methods))
+                  (keep (fn [m]
+                          (when (and (not (every? #{-nothing} (:dom m)))
+                                     (< 1 (count (dom-counts (count (:dom m))))))
+                            m))
+                        methods)
+                  methods)]
+    {:op :IFn
+     :methods (vec methods)}))
+
 ; Poly -> (Vec F)
 (defn Poly-frees [p]
   {:pre [(Poly? p)]

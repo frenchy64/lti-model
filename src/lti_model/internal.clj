@@ -9,6 +9,7 @@
 ;     | n                    ; integers
 ;     | sym                  ; locals
 ;     | (ann (fn [x *] e) t) ; annotated functions
+;     | (fn [x *] e)         ; unannotated functions (see `unreachable-closure-test` for how to eliminate)
 ;     | (ann e t)            ; type ascription
 ;     | [e *]                ; sequences
 

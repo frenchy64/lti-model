@@ -654,9 +654,9 @@
              (let [x9 #(x8 (x8 %))]
              (let [x10 #(x9 (x9 %))]
                (x5 1))))))))))))))
-  ;hits fn checking limit (x6)
+  ;checks (x6)
   (is
-     (tc-err Any
+     (tc Any
          (let [pair (fn [x y]
                       (fn [z]
                         (z x y)))
@@ -1066,13 +1066,13 @@
             (let [f (ann (fn [x] x) [Int :-> Int])]
               (f (f (f (f (f (f 1))))))))))
   ; suggestion with 1 level of nested Closures
-  (is (binding [*reduction-limit* 5]
+  (is (binding [*global-reduction-limit* 10]
         (tc-err ?
                 (let [g (fn [x] x)]
                 (let [f (fn [g x] (g x))]
                   (f g (f g (f g (f g (f g (f g 1)))))))))))
   ; following the suggestion fixes the problem
-  (is (binding [*reduction-limit* 5]
+  (is (binding [*global-reduction-limit* 10]
         (tc ?
             (let [g (fn [x] x)]
               (let [f (ann (fn [g x] (g x))
@@ -1560,6 +1560,48 @@
   (is (= '((ann map (PApp (All [a b] [[a :-> b] (Seq a) :-> (Seq b)]) Int Int)) inc [1 2 3])
          (tc-exp ? (map inc [1 2 3]))))
   )
+
+; sometimes a function is nested in such a way that makes the
+; an internal closure unreachable. this seems bad since we need
+; to add unannotated functions to the internal language.
+; Consider: always checking an unannotated function at Bot -> ? upon discovery
+; in the external language. That way, all functions are annotated in internal lang.
+; Once I added this, the checking limit had to be 10x higher for the let-polymorphism
+; stress tests. Probably because it exponentially increased the number of times closures had to be
+; checked, wrt to their nested depth. (OTOH, in the same commit I let subtyping participate
+; in decreasing the checking limit (bug fix), so that might have also increased the limit needed).
+;
+; The lambda-encoding for let's now seems very expensive:
+; eg. (let [a 1 b 2 c 3] ...)
+;     will first check
+;      a : Nothing                           |- (let [b 2 c 3] ...)
+;      a : Nothing, b : Nothing              |- (let [c 3] ...)
+;      a : Nothing, b : Nothing, c : Nothing |- (let [] ...)
+;     before checking `1`, then checks
+;      a : Int                           |- (let [b 2 c 3] ...)
+;      a : Int, b : Nothing              |- (let [c 3] ...)
+;      a : Int, b : Nothing, c : Nothing |- (let [] ...)
+;     before checking `2`, then checks,
+;      a : Int, b : Int              |- (let [c 3] ...)
+;      a : Int, b : Int, c : Nothing |- (let [] ...)
+;     before checking `3`, then checks,
+;      a : Int, b : Int, c : Int |- (let [] ...)
+;
+; Looks exponential in the number of nested let's.
+(deftest unreachable-closure-test
+  ;unexercised symbolic closures
+  ;TODO should be: (ann (fn [a] a) [Nothing :-> Nothing])
+  (is (= '(ann (fn [a] a) (IFn))
+         (tc+elab ? (fn [a] a))))
+  ; unreachable unannotated function in elaboration
+  ;TODO
+  ;should be: (ann (fn [a]
+  ;                (ann (fn [b] a)
+  ;                     [Nothing :-> Nothing]))
+  ;                [Nothing :-> [Nothing :-> Nothing]])
+  (is (= '(ann (fn [a] (fn [b] a))
+               (IFn))
+         (tc+elab ? (fn [a] (fn [b] a))))))
 
 (comment
   ;Error messages
