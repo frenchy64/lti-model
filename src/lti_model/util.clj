@@ -430,7 +430,8 @@
     (cond
       (vector? t) {:op :IFn
                    :methods [(parse-fn-arity t)]}
-      (seq? t) (case (first t)
+      ((every-pred seq? seq) t)
+              (case (first t)
                  U (make-U (map parse-type (rest t)))
                  I (make-I (map parse-type (rest t)))
                  Seq {:op :Seq

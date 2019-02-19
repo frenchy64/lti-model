@@ -170,13 +170,34 @@
 (defn Mu* [sym t & args]
   (apply u/Mu*-by sym t abstract args))
 
+; (defalias CExpected '{:args (Vec T) :ret T})
+
+; (Atom (Map Symbol (HMap :mandatory {:the-closure Closure}
+;                         ; if the closure didn't type check, these might not be added
+;                         :optional  {:reduction-count Int,
+;                                     :expecteds (Map CExpected Int)
+;                                     :forms (Vec Any)
+;                                     :actual-rngs (Map CExpected (Set T))})))
+(def ^:dynamic *closure-cache* nil)
+
 ; Any -> T
 (defn parse-type [t]
-  (cond
-    ('#{?} t) -wild
-    :else (u/parse-type-by t {:Poly* Poly*
-                              :Mu* Mu*
-                              :parse-type parse-type})))
+  {:post [(u/Type? %)]}
+  (let [special-case (and ((every-pred seq? seq) t)
+                          ('#{::ClosureByID} (first t)))]
+    (cond
+      special-case (case special-case
+                     ::ClosureByID (let [[_ id & more] t
+                                         _ (assert (symbol? id))
+                                         _ (assert (not more))
+                                         cache @*closure-cache*
+                                         clo (get-in cache [id :the-closure])]
+                                     (assert (Closure? clo))
+                                     clo))
+      ('#{?} t) -wild
+      :else (u/parse-type-by t {:Poly* Poly*
+                                :Mu* Mu*
+                                :parse-type parse-type}))))
 
 (declare unparse-type)
 
@@ -196,13 +217,21 @@
 
 ; T -> Any
 (defn unparse-type [t]
+  {:pre [(u/Type? t)]}
   (case (:op t)
     :Wild (do (assert (not *unparse-disallow-wildcard*))
               '?)
     :Closure (do
                (assert (not *unparse-disallow-closure*))
                (if *unparse-closure-by-id*
-                 (list ::ClosureByID (:id t))
+                 (let [{:keys [id enclosing-fn-stack env expr]} t
+                       _ (assert (and id enclosing-fn-stack env expr))]
+                   (list ::ClosureByID (:id t)
+                         ;TODO very expensive operations, not sure why yet. recursive closures?
+                         ;:expr expr
+                         ;:enclosing-fn-stack (mapv unparse-type enclosing-fn-stack)
+                         ;:env (unparse-env env)
+                         ))
                  (list 'Closure (unparse-env (:env t)) (:expr t))))
     :TypeCase (list* 'TypeCase (unparse-type (:t t))
                      (mapcat #(map unparse-type %) (:cases t)))
@@ -995,14 +1024,6 @@
                    :interface m
                    :subst (substitution-for-constraint X c m)})))))))))
 
-; (defalias CExpected '{:args (Vec T) :ret T})
-
-; (Atom (Map Symbol (HMap :mandatory {:reduction-count Int,
-;                                     :expecteds (Map CExpected Int)}
-;                         ; if the closure didn't type check, these might not be added
-;                         :optional  {:forms (Vec Any)
-;                                     :actual-rngs (Map CExpected (Set T))})))
-(def ^:dynamic *closure-cache* nil)
 (def ^:dynamic *reduction-limit* 100)
 (def ^:dynamic *global-reduction-counter* nil)
 (def ^:dynamic *global-reduction-limit* 1000)
@@ -1140,7 +1161,7 @@
          (Closure? cop)]}
   ; if a local function happens to have equivalent source and environment,
   ; their reports will probably be conflated
-  (when-let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache cop)]
+  (when-let [{:keys [reduction-count expecteds actual-rngs] :as entry} (get closure-cache (:id cop))]
     (str "\n=== Symbolic Closure report ===\n"
          "\tReductions: " (or reduction-count 0) "\n"
          "\tDistinct expecteds: " (count expecteds) "\n"
@@ -1271,6 +1292,40 @@
           r)))))
 
 (declare merge-TypeCases)
+
+(def reserved-symbols '#{ann let fn fn*})
+
+; [Type -> Type] Env Any -> Any
+(defn visit-annotations [f env e]
+  (cond
+    (symbol? e) e
+    (vector? e) (mapv #(visit-annotations f env %) e)
+    ((every-pred seq? seq) e)
+             (let [[op & args] e]
+               (case op
+                 ann (let [[e' at & more] args
+                           _ (when more
+                               (throw (ex-info (str "Extra arguments to 'ann': " more)
+                                               {type-error-kw true})))
+                           _ (assert (= 2 (count args)) "Not enough arguments to 'ann'")]
+                       (list 'ann (visit-annotations f env e')
+                             (f at)))
+                 let (throw (Exception. "Can only visit internal language"))
+                 (fn fn*) (let [[plist body & more] args
+                                _ (when more
+                                    (throw (ex-info (str "Extra arguments to 'fn': " more)
+                                                    {type-error-kw true})))
+                                _ (assert (= 2 (count args)) "Not enough arguments to 'fn'")
+                                _ (assert (and (vector? plist)
+                                               (every? symbol? plist))
+                                          (str "'fn' takes a vector of arguments, found " plist))
+                                _ (assert (not-any? reserved-symbols plist)
+                                          (str "Cannot use reserved symbol: "
+                                               (some reserved-symbols plist)))]
+                            (list op plist (visit-annotations f env body)))
+                 (doall (map #(visit-annotations f env %) e))))
+    ((some-fn integer? string?) e) e
+    :else (assert nil (str "Bad expression in visit-annotations: " (pr-str e)))))
 
 ; dirty-tree-walk expression e and resolve symbolic closures
 (defn resolve-symbolic-closures [closure-cache e]
@@ -1434,8 +1489,6 @@
 (defn type-for-symbol [env e]
   (u/type-for-symbol-with env e constant-type))
 
-(def reserved-symbols '#{ann let fn fn*})
-
 ;P Closure -> Result
 (defn check-symbolic-closure [P-interface clos]
   {:pre [(u/Type? P-interface)
@@ -1574,6 +1627,7 @@
                                                    :enclosing-fn-stack *enclosing-fn-stack*
                                                    :env env
                                                    :expr e}
+                                                _ (swap! *closure-cache* assoc-in [(:id t) :the-closure] t)
                                                 ; check at [Nothing ... :-> ?] to collect minimal annotation
                                                 ; if this closure is never exercised
                                                 #_#_
