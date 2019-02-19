@@ -1559,6 +1559,17 @@
 #_
   (is (= '((ann map (PApp (All [a b] [[a :-> b] (Seq a) :-> (Seq b)]) Int Int)) inc [1 2 3])
          (tc-exp ? (map inc [1 2 3]))))
+#_
+  (is (= '?
+         (tc-exp ? (let [; f is exercised with a polymorphic function
+                         ; and a symbolic closure. in the former, an instantiation
+                         ; is needed in (f x y), in the latter it is not.
+                         ; therefore, type instantiation must be nested in a TypeCase,
+                         ; and so an `inst` term is not sufficient.
+                         a (fn [f x y] (f x y))
+                         mp-id (fn [x y] y)]
+                     [(a map inc [1 2 3])
+                      (a mp-id inc [1 2 3])]))))
   )
 
 ; sometimes a function is nested in such a way that makes the

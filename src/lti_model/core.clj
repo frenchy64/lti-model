@@ -1343,6 +1343,8 @@
                            ffrms (map #(get-in closure-cache [% :forms]) ids)]
                        (if (every? nil? ffrms)
                          ;dead code, equivalent to checking the function as Any (or maybe `(IFn)`?)
+                         ; alternatively, we could check the function as [Nothing * -> ?] here so the
+                         ; internal language doesn't need unannotated functions
                          original-form
                          (let [_ (assert (every? (every-pred vector? seq) ffrms)
                                          (vec ffrms))
@@ -1436,7 +1438,8 @@
 (defn merge-TypeCases [es]
   {:pre [(seq es)]}
   (let [add-ann-left (fn [e1 e2]
-                       {:pre [(ann-form? e1)]}
+                       {:pre [(ann-form? e1)
+                              (not (ann-form? e2))]}
                        (let [[ann e t] e1]
                          (list ann
                                (merge-TypeCases [e e2])
@@ -1474,6 +1477,7 @@
                         (count e2)))
                 (mapv #(merge-TypeCases %&) e1 e2)
 
+                ; TODO special handling of 'fn'
                 (and (seq? e1)
                      (seq? e2)
                      (= (count e1)
@@ -1630,6 +1634,8 @@
                                                 _ (swap! *closure-cache* assoc-in [(:id t) :the-closure] t)
                                                 ; check at [Nothing ... :-> ?] to collect minimal annotation
                                                 ; if this closure is never exercised
+                                                ; alternatively, can could just before elaboration into internal lang
+                                                ; as needed.
                                                 #_#_
                                                 _ (check-symbolic-closure
                                                     (u/make-IFn
@@ -1640,7 +1646,6 @@
                                                               (list ::ClosureFormsByID
                                                                     {:original-form e
                                                                      :ids [(:id t)]})
-                                                              ; FIXME e needs to be updated with static info
                                                               (binding [*unparse-closure-by-id* true]
                                                                 (wrap-enclosing-fn-cases t)))
                                                         t))
