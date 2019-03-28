@@ -1110,6 +1110,15 @@
         d)
       @a)))
 
+(defn closure-count [d]
+  (when (some? d)
+    (let [a (atom 0)]
+      (walk/postwalk
+        #(when (= 'Closure %)
+           (swap! a inc))
+        d)
+      @a)))
+
 (defn node-count [d]
   (when (some? d)
     (let [a (atom 0)]
@@ -1136,6 +1145,85 @@
                       (fn [z]
                         (z x x)))]
               P))))
+  (is (symbol-count
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (P 1)))))
+  (is (symbol-count
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (P (P 1))))))
+  (is (symbol-count
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (P (P (P 1)))))))
+  (is (symbol-count
+        (tc ?
+            (let [P (fn [x]
+                      (fn [z]
+                        (z x x)))]
+              (P (P (P (P 1))))))))
+  (is (symbol-count
+        (tc ?
+            ((fn [x]
+               (fn [z]
+                 (z x x))) 1))))
+  (is (symbol-count
+        (tc ?
+            ((fn [x]
+               (fn [z]
+                 (z x x)))
+             ((fn [x]
+                (fn [z]
+                  (z x x))) 1)))))
+  (is (symbol-count
+        (tc ?
+            ((fn [x]
+               (fn [z]
+                 (z x x)))
+             ((fn [x]
+                (fn [z]
+                  (z x x)))
+              ((fn [x]
+                 (fn [z]
+                   (z x x))) 1))))))
+  (is (symbol-count
+        (tc ?
+            ((fn [x]
+               (fn [z]
+                 (z x x)))
+             ((fn [x]
+                (fn [z]
+                  (z x x)))
+              ((fn [x]
+                 (fn [z]
+                   (z x x)))
+               ((fn [x]
+                  (fn [z]
+                    (z x x))) 1)))))))
+  (is (symbol-count
+        (tc ?
+            ((fn [x]
+               (fn [z]
+                 (z x x)))
+             ((fn [x]
+                (fn [z]
+                  (z x x)))
+              ((fn [x]
+                 (fn [z]
+                   (z x x)))
+               ((fn [x]
+                  (fn [z]
+                    (z x x)))
+                ((fn [x]
+                   (fn [z]
+                     (z x x))) 1))))))))
   (is (symbol-count
         (tc ?
             (let [comp (fn [f g]
@@ -1225,6 +1313,86 @@
                     (let [x3 (P x2)]
                       (let [x4 (P x3)]
                         x4)))))))))
+  ;inline P
+  (is ((juxt last symbol-count)
+       (walk/postwalk
+         (fn [f]
+           ('{} f f))
+         (tc ?
+             (let [x0 1]
+               (let [x1 ((fn [x]
+                           (fn [z]
+                             (z x x))) x0)]
+                 x1))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         identity
+         #_
+         (fn [f]
+           ('{(Closure {x0 Int, x Int} (fn [z] (z x x))) Pc1} f f))
+         (tc ?
+             (let [x0 1]
+               (let [
+                     x1 ((fn [x]
+                           (fn [z]
+                             (z x x))) x0)
+                     x2 ((fn [x]
+                           (fn [z]
+                             (z x x))) x1)
+                     ]
+                 x2))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         identity
+         #_
+         (fn [f]
+           ('{
+              (Closure {x0 Int, x Int} (fn [z] (z x x))) Pc1
+              (Closure {x0 Int, x1 Pc1, x Pc1} (fn [z] (z x x))) Pc2
+              }
+                       f f))
+        (tc ?
+            (let [x0 1]
+              (let [
+                    x1 ((fn [x]
+                          (fn [z]
+                            (z x x))) x0)
+                    x2 ((fn [x]
+                          (fn [z]
+                            (z x x))) x1)
+                    x3 ((fn [x]
+                          (fn [z]
+                            (z x x))) x2)
+                    ]
+                x3))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         identity
+         #_
+         (fn [f]
+           ('{(Closure {x0 Int, x Int} (fn [z] (z x x))) Pc1
+              (Closure {x0 Int, x1 Pc1, x Pc1} (fn [z] (z x x))) Pc2
+              (Closure {x0 Int, x1 Pc1, x2 Pc2, x Pc2} (fn [z] (z x x))) Pc3
+              }
+                       f f))
+
+         (tc ?
+             (let [x0 1]
+               (let [
+                     x1 ((fn [x]
+                           (fn [z]
+                             (z x x))) x0)
+                     x2 ((fn [x]
+                           (fn [z]
+                             (z x x))) x1)
+                     x3 ((fn [x]
+                           (fn [z]
+                             (z x x))) x2)
+                     x4 ((fn [x]
+                           (fn [z]
+                             (z x x))) x3)
+                     ]
+                 x4))))))
   )
 
 ;from Kanellakis & Mitchell [POPL 1989]
@@ -1346,18 +1514,112 @@
                          f))
               r)))
         r))
-  (is (tc [[Any :-> [Any :-> Any]] :-> ?]
-          (let [I (fn [a] a)
-                K (fn [b]
-                    (fn [c]
-                      b))
-                D (fn [d]
-                    (d d))]
-            ((fn [x]
-               (fn [y]
-                 ((y (x I))
-                  (x K))))
-             D))))
+  (is (tc-err [Any :-> ?]
+              (let [I (fn [a] a)
+                    K (fn [b]
+                        (fn [c]
+                          b))
+                    D (fn [d]
+                        (d d))]
+                ((fn [x]
+                   (fn [y]
+                     ((y (x I))
+                      (x K))))
+                 D))))
+  (is (tc-err [[Any :-> Any] :-> ?]
+              (let [I (fn [a] a)
+                    K (fn [b]
+                        (fn [c]
+                          b))
+                    D (fn [d]
+                        (d d))]
+                ((fn [x]
+                   (fn [y]
+                     ((y (x I))
+                      (x K))))
+                 D))))
+  (is (= '[[Any :-> [Any :-> Nothing]] :-> Nothing]
+         (tc [[? :-> [? :-> ?]] :-> ?]
+             (let [I (fn [a] a)
+                   K (fn [b]
+                       (fn [c]
+                         b))
+                   D (fn [d]
+                       (d d))]
+               ((fn [x]
+                  (fn [y]
+                    ((y (x I))
+                     (x K))))
+                D)))))
+  (is (= '[[Any :-> [Any :-> Int]] :-> Int]
+         (tc [[? :-> [? :-> Int]] :-> ?]
+             (let [I (fn [a] a)
+                   K (fn [b]
+                       (fn [c]
+                         b))
+                   D (fn [d]
+                       (d d))]
+               ((fn [x]
+                  (fn [y]
+                    ((y (x I))
+                     (x K))))
+                D)))))
+  (is (= '(All [a] [[Any :-> [Any :-> a]] :-> a])
+         (tc (All [a] [[? :-> [? :-> a]] :-> ?])
+             (let [I (fn [a] a)
+                   K (fn [b]
+                       (fn [c]
+                         b))
+                   D (fn [d]
+                       (d d))]
+               ((fn [x]
+                  (fn [y]
+                    ((y (x I))
+                     (x K))))
+                D)))))
+  (is (= '(All [a] [a :-> a])
+         (tc (All [a] [a :-> a])
+             (fn [i]
+               ((let [I (fn [a] a)
+                      K (fn [b]
+                          (fn [c]
+                            b))
+                      D (fn [d]
+                          (d d))]
+                  ((fn [x]
+                     (fn [y]
+                       ((y (x I))
+                        (x K))))
+                   D))
+                (fn [_]
+                  (fn [_]
+                    i)))))))
+  (is (= '[[Any :-> [Any :-> Any]] :-> Any]
+         (tc [[Any :-> [Any :-> Any]] :-> ?]
+             (let [I (fn [a] a)
+                   K (fn [b]
+                       (fn [c]
+                         b))
+                   D (fn [d]
+                       (d d))]
+               ((fn [x]
+                  (fn [y]
+                    ((y (x I))
+                     (x K))))
+                D)))))
+  (is (= '[[Any :-> [Any :-> Int]] :-> Int]
+         (tc [[Any :-> [Any :-> Int]] :-> ?]
+             (let [I (fn [a] a)
+                   K (fn [b]
+                       (fn [c]
+                         b))
+                   D (fn [d]
+                       (d d))]
+               ((fn [x]
+                  (fn [y]
+                    ((y (x I))
+                     (x K))))
+                D)))))
   (is (tc [[Any :-> [Any :-> Int]] :-> Int]
           (let [I (fn [a] a)
                 K (fn [b]
