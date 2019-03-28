@@ -1318,6 +1318,118 @@
                       (let [x5 (fn [y] (x4 (x4 y)))]
                         (x5 (fn [x] x)))))))))))))
 
+; From "Characterization of typings in polymorphic type discipline" - Giannini and Rocca
+; a term without higher-order polymorphic type
+(deftest giannini-rocca-term
+  (is (let [r (tc ? 
+                  (let [I (fn [a] a)
+                        K (fn [b]
+                            (fn [c]
+                              b))
+                        D (fn [d]
+                            (d d))]
+                    ((fn [x]
+                       (fn [y]
+                         ((y (x I))
+                          (x K))))
+                     D)))]
+        #_
+        (binding [*print-level* nil
+                  *print-length* nil]
+          (pprint
+            (walk/prewalk 
+              (fn [f]
+                  ('{(fn [a] a) I
+                     (fn [b] (fn [c] b)) K
+                     (fn [d] (d d)) D}
+                         f
+                         f))
+              r)))
+        r))
+  (is (tc [[Any :-> [Any :-> Any]] :-> ?]
+          (let [I (fn [a] a)
+                K (fn [b]
+                    (fn [c]
+                      b))
+                D (fn [d]
+                    (d d))]
+            ((fn [x]
+               (fn [y]
+                 ((y (x I))
+                  (x K))))
+             D))))
+  (is (tc [[Any :-> [Any :-> Int]] :-> Int]
+          (let [I (fn [a] a)
+                K (fn [b]
+                    (fn [c]
+                      b))
+                D (fn [d]
+                    (d d))]
+            ((fn [x]
+               (fn [y]
+                 ((y (x I))
+                  (x K))))
+             D))))
+  (is (tc [[[Int :-> Int] :-> [Any :-> Int]] :-> Int]
+          (let [I (fn [a] a)
+                K (fn [b]
+                    (fn [c]
+                      b))
+                D (fn [d]
+                    (d d))]
+            ((fn [x]
+               (fn [y]
+                 ((y (x I))
+                  (x K))))
+             D))))
+  (is (tc [[[Int :-> Int] :-> [[Any :-> [Int :-> [Int :-> Int]]] :-> Int]] :-> Int]
+          (let [I (fn [a] a)
+                K (fn [b]
+                    (fn [c]
+                      b))
+                D (fn [d]
+                    (d d))]
+            ((fn [x]
+               (fn [y]
+                 ((y (x I))
+                  (x K))))
+             D))))
+  (is (= 'Int
+         (tc ?
+             (let [I (fn [a] a)
+                   K (fn [b]
+                       (fn [c]
+                         b))
+                   D (fn [d]
+                       (d d))]
+               (let [GR ((fn [x]
+                           (fn [y]
+                             ((y (x I))
+                              (x K))))
+                         D)]
+                 (GR (fn [f]                  ;f  : [Int :-> Int]
+                       (fn [g]                ;g  : [Any :-> [Int :-> [Int :-> Int]]]
+                         (let [g1 (g 1)]      ;g1 : [Int :-> [Int :-> Int]]
+                           (let [g2 (g1 1)]   ;g2 : [Int :-> Int]
+                             (inc (g2 (inc (f 1))))))))))))))
+  (is (= 'Int
+         (tc ?
+             (let [I (fn [a] a)
+                   K (fn [b]
+                       (fn [c]
+                         b))
+                   D (fn [d]
+                       (d d))]
+               (let [GR ((fn [x]
+                           (fn [y]
+                             ((y (x I))
+                              (x K))))
+                         D)]
+                 (GR (fn [_]
+                       (fn [_]
+                         42))))))))
+  )
+
 (deftest polymorphic-upcast
   (is (= '(All [b a] [[a :-> b] a :-> b])
          (tc (All [b a] [[a :-> b] a :-> b])
