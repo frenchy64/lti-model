@@ -1439,52 +1439,106 @@
                         (z x x)))]
               (P (P (P (fn [y] y))))))))
   ; example 3.5 starts here
-  (is ((juxt last symbol-count)
-        (tc ?
-            (let [P (fn [x]
-                      (fn [z]
-                        (z x x)))]
-              (let [x1 (fn [x] (P x))]
-                (x1 (fn [x] x)))))))
-  (is ((juxt last symbol-count)
-        (tc ?
-            (let [P (fn [x]
-                      (fn [z]
-                        (z x x)))]
-              (let [x1 (fn [x'] (P x'))]
-                (let [x2 (fn [y] (x1 (x1 y)))]
-                  (x2 (fn [i] i))))))))
-  (is ((juxt last symbol-count)
-        (tc ?
-            (let [P (fn [x]
-                      (fn [z]
-                        (z x x)))]
-              (let [x1 (fn [x] (P x))]
-                (let [x2 (fn [y] (x1 (x1 y)))]
-                  (let [x3 (fn [y] (x2 (x2 y)))]
-                    (x3 (fn [x] x)))))))))
-  (is ((juxt last symbol-count)
-        (tc ?
-            (let [P (fn [x]
-                      (fn [z]
-                        (z x x)))]
-              (let [x1 (fn [x] (P x))]
-                (let [x2 (fn [y] (x1 (x1 y)))]
-                  (let [x3 (fn [y] (x2 (x2 y)))]
-                    (let [x4 (fn [y] (x3 (x3 y)))]
-                      (x4 (fn [x] x))))))))))
-  (is ((juxt last symbol-count)
-       (binding [*disable-elaboration* true] ;FIXME slow! unsure if elaborates
-        (tc ?
-            (let [P (fn [x]
-                      (fn [z]
-                        (z x x)))]
-              (let [x1 (fn [x] (P x))]
-                (let [x2 (fn [y] (x1 (x1 y)))]
-                  (let [x3 (fn [y] (x2 (x2 y)))]
-                    (let [x4 (fn [y] (x3 (x3 y)))]
-                      (let [x5 (fn [y] (x4 (x4 y)))]
-                        (x5 (fn [x] x)))))))))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         identity
+         #_(fn [f]
+           ('{(fn [z] (z x x)) Pz} f f))
+         (tc ?
+             (let [P (fn [x]
+                       (fn [z]
+                         (z x x)))]
+               (let [x1 (fn [x] (P x))]
+                 (x1 1)))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         identity
+         #_
+         (fn [f]
+           ('{(fn [z] (z x x)) Pz
+              (Closure {x Int} Pz) Pc1} f f))
+         (tc ?
+             (let [P (fn [x]
+                       (fn [z]
+                         (z x x)))]
+               (let [x1 (fn [x] (P x))]
+                 (let [x2 (fn [y] (x1 (x1 y)))]
+                   (x2 1))))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         identity
+         #_
+         (fn [f]
+           ('{(fn [z] (z x x)) Pz
+              (Closure {x Int} Pz) Pc1
+              (Closure {x Pc1} Pz) Pc2} f f))
+         (tc ?
+             (let [P (fn [x]
+                       (fn [z]
+                         (z x x)))]
+               (let [x1 (fn [x] (P x))]
+                 (let [x2 (fn [y] (x1 (x1 y)))]
+                   (let [x3 (fn [y] (x2 (x2 y)))]
+                     (x3 1)))))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         identity
+         #_
+         (fn [f]
+           ('{(fn [z] (z x x)) Pz
+              (Closure {x Int} Pz) Pc1
+              (Closure {x Pc1} Pz) Pc2
+              (Closure {x Pc2} Pz) Pc3} f f))
+         (tc ?
+             (let [P (fn [x]
+                       (fn [z]
+                         (z x x)))]
+               (let [x1 (fn [x] (P x))]
+                 (let [x2 (fn [y] (x1 (x1 y)))]
+                   (let [x3 (fn [y] (x2 (x2 y)))]
+                     (let [x4 (fn [y] (x3 (x3 y)))]
+                       (x4 1))))))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         (fn [f]
+           ('{(fn [z] (z x x)) Pz
+              (Closure {x Int} Pz) Pc1
+              (Closure {x Pc1} Pz) Pc2
+              (Closure {x Pc2} Pz) Pc3
+              (Closure {x Pc3} Pz) Pc4
+              } f f))
+         (binding [*disable-elaboration* true] ;FIXME slow! unsure if elaborates
+           (tc ?
+               (let [P (fn [x]
+                         (fn [z]
+                           (z x x)))]
+                 (let [x1 (fn [x] (P x))]
+                   (let [x2 (fn [y] (x1 (x1 y)))]
+                     (let [x3 (fn [y] (x2 (x2 y)))]
+                       (let [x4 (fn [y] (x3 (x3 y)))]
+                         (let [x5 (fn [y] (x4 (x4 y)))]
+                           (x5 1))))))))))))
+  (is ((juxt last symbol-count closure-count)
+       (walk/postwalk
+         (fn [f]
+           ('{(fn [z] (z x x)) Pz
+              (Closure {x Int} Pz) Pc1
+              (Closure {x (Closure {x Pc1} Pz)} Pz) Pz2
+              (Closure {x (Closure {x (Closure {x (Closure {x Pz2} Pz)} Pz)} Pz)} Pz) Pz3
+              } f f))
+         (binding [*disable-elaboration* true] ;FIXME slow! unsure if elaborates
+           (tc ?
+               (let [P (fn [x]
+                         (fn [z]
+                           (z x x)))]
+                 (let [x1 (fn [x] (P x))]
+                   (let [x2 (fn [y] (x1 (x1 y)))]
+                     (let [x3 (fn [y] (x2 (x2 y)))]
+                       (let [x4 (fn [y] (x3 (x3 y)))]
+                         (let [x5 (fn [y] (x4 (x4 y)))]
+                           (let [x6 (fn [y] (x5 (x5 y)))]
+                             (x6 1)))))))))))))
+)
 
 ; From "Characterization of typings in polymorphic type discipline" - Giannini and Rocca
 ; a term without higher-order polymorphic type
