@@ -83,7 +83,6 @@
   (is (= '(Seq Int)
          (tc ? [1 2])))
   (is (tc-err Int [1 2]))
-  (is (tc-err Int [1 2]))
   (is (= '(Seq Int)
          (tc (Seq ?) [1 2])))
   (is (= '(Closure {} (fn [x] [1 2]))
@@ -2042,6 +2041,17 @@
                (IFn))
          (tc+elab ? (fn [a] (fn [b] a))))))
 
+;http://web.cs.ucla.edu/~palsberg/tba/papers/banerjee-icfp97.pdf
+; A modular, polyvariant and type-based closure analysis - Banerjee
+(deftest banerjee-test
+  (is (= '(Closure {f (Closure {} (fn [v] v)), x Int} (fn [u] u))
+         (tc ?
+             ((fn [f] ((fn [x]
+                         (f (fn [u] u)))
+                       (f 0)))
+              (fn [v] v))))))
+
+
 (comment
   ;Error messages
   ;Unicode Arrows: ↘ ⟶ ⟵ ↙  
@@ -2346,4 +2356,40 @@
   (is (= 'Int
          (tc ?
              (appid id 0))))
+
+(tc ? 1)
+Int
+
+(tc [Int :-> Int] (fn [x] x))
+[Int :-> Int]
+
+(tc ? (fn [x] x))
+(Closure {} (fn [x] x))
+
+(tc ? ((fn [x] x) 1))
+Int
+
+(tc ? (map (fn [x] x) [1 2 3]))
+(Seq Int)
+
+(tc ? (map (comp (fn [x] x)
+                 (fn [y] y))
+           [1 2 3]))
+(Seq Int)
+
+             (let [I (fn [a] a)
+                   K (fn [b]
+                       (fn [c]
+                         b))
+                   D (fn [d]
+                       (d d))]
+               (let [GR ((fn [x]
+                           (fn [y]
+                             ((y (x I))
+                              (x K))))
+                         D)]
+(GR
+ (fn [_]
+   (fn [_]
+     42)))))
 )
