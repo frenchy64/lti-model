@@ -889,6 +889,7 @@
             (f 1))))
   )
 
+;; mainly hofs and transducers
 (deftest fancy-polymorphic-upcast
   (is (= '(All [c a b]
             [[b :-> c] [a :-> b] :-> [a :-> c]])
