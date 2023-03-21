@@ -11,7 +11,13 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'maven'
+      - name: Cache clojure dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.m2/repository
+          key: cljdeps-${{ hashFiles('project.clj') }}
+          restore-keys: cljdeps-
       - name: Install clojure tools
         uses: DeLaGuardo/setup-clojure@10.2
         with:
